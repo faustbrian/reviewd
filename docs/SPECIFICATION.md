@@ -1,5 +1,9 @@
 # Goal: implement reviewd completely and deliver it continuously to main
 
+Operator scope update (2026-10-13): support macOS and Linux only. Windows
+implementation, artifacts and acceptance are excluded. All other requirements
+remain in scope.
+
 Implement the entire specification below as a production-quality, personal, local-first Go CLI in:
 
 git@github.com:faustbrian/reviewd.git
@@ -594,7 +598,7 @@ Requirements:
 
 ## 15. Compatibility, distribution, and documentation
 
-Implement and validate supported macOS, Linux, and Windows behaviour.
+Implement and validate supported macOS and Linux behaviour.
 
 Provide:
 
