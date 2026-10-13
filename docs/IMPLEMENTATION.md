@@ -9,10 +9,10 @@ Windows support was explicitly removed by the operator on 2026-10-13.
 ## Current delivery
 
 The private Codex protocol adapter, sealed evidence broker, setup, diagnostics
-and trusted configuration explanation are delivered. The current batch adds
-manual private review preparation, complete immutable source/context capture,
-SQLite run persistence, exact previews and checks-only refresh without another
-source/model review. It is not the finished application:
+and trusted configuration explanation are delivered. Manual private review
+preparation, complete immutable source/context capture, SQLite run persistence,
+exact previews and checks-only refresh without another source/model review are
+delivered at `b8a4fd46aa7165e66e5042f11bd2aebe1c5737db`. It is not the finished application:
 discovery, scheduling/recovery, publication, notifications and the TUI remain
 outstanding. See [configuration and setup](CONFIGURATION.md) and
 [private reviews](REVIEWS.md).
@@ -85,8 +85,16 @@ Those results do not certify later uncommitted CLI changes.
 
 Setup/configuration at `ab689855eb62a57e68741ab92b84279138f81c25` passed all four
 native hosted jobs in [run 38413412605](https://github.com/faustbrian/reviewd/actions/runs/38413412605).
-The current manual-review batch remains local pending final verification,
-independent review and delivery.
+The manual-review batch at `b8a4fd46aa7165e66e5042f11bd2aebe1c5737db` passed
+native macOS arm64 and both Linux jobs in
+[run 38444663689](https://github.com/faustbrian/reviewd/actions/runs/38444663689).
+Its macOS Intel job exposed a cleanup failure. A controlled Darwin reproduction
+confirmed that a group containing only an exited child can return `EPERM`
+between the metadata scan and signal. The supervisor now rechecks liveness after
+that error; live or uninspectable groups still fail and retain private state.
+The fixture exercises safe removal and both retention controls. This local
+reproduction does not establish the unrecorded process state of the failed CI
+job; native hosted follow-up remains a separate verification boundary.
 
 A separate native CLI acceptance adapter used owned HTTP/Git fixtures and the
 actual authenticated Codex/installed `requesting-code-review` package. It found

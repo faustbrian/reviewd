@@ -34,14 +34,14 @@ func superviseProcess(command *exec.Cmd, parent <-chan error, stop <-chan struct
 		return err
 	}
 	if alive {
-		if err := syscall.Kill(-command.Process.Pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		if err := signalProcessGroup(command.Process.Pid, syscall.SIGTERM); err != nil {
 			return err
 		}
 		if err := waitProcessGroup(command.Process.Pid, 3*time.Second); err != nil {
 			if !errors.Is(err, context.DeadlineExceeded) {
 				return err
 			}
-			if err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			if err := signalProcessGroup(command.Process.Pid, syscall.SIGKILL); err != nil {
 				return err
 			}
 			if err := waitProcessGroup(command.Process.Pid, 3*time.Second); err != nil {
@@ -57,6 +57,25 @@ func superviseProcess(command *exec.Cmd, parent <-chan error, stop <-chan struct
 		}
 	}
 	return nil
+}
+
+func signalProcessGroup(group int, signal syscall.Signal) error {
+	err := syscall.Kill(-group, signal)
+	if err == nil || errors.Is(err, syscall.ESRCH) {
+		return nil
+	}
+	if errors.Is(err, syscall.EPERM) {
+		// Darwin may return EPERM after the last eligible member exits. The
+		// earlier metadata scan cannot certify the state at this signal.
+		alive, inspectErr := processGroupAlive(group)
+		if inspectErr != nil {
+			return errors.Join(err, inspectErr)
+		}
+		if !alive {
+			return nil
+		}
+	}
+	return err
 }
 
 func waitProcessGroup(group int, timeout time.Duration) error {
