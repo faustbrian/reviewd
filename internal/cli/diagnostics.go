@@ -287,7 +287,7 @@ func probeCodex(ctx context.Context, scopes []config.Snapshot) []Diagnostic {
 	}
 	closeErr := worker.Close()
 	if accountErr != nil {
-		result = append(result, Diagnostic{Check: "Codex account", Status: "error", Message: "Codex authentication is missing, unsupported or could not be refreshed.", Correction: "Sign in with Codex file authentication or supported provider authentication and rerun doctor."})
+		result = append(result, Diagnostic{Check: "Codex account", Status: "error", Message: "Codex account metadata is missing, unsupported or unavailable.", Correction: "Check existing Codex file authentication or supported provider authentication and rerun doctor; actual provider acceptance is established by a review turn."})
 	} else if readErr != nil {
 		result = append(result, Diagnostic{Check: "Codex models", Status: "error", Message: "Account model discovery failed.", Correction: "Confirm Codex authentication/network access and rerun doctor."})
 	} else {

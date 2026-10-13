@@ -50,8 +50,8 @@ and corrective actions. Exit 0 means safe configuration creation succeeded;
 an empty repository allowlist, are not authentication success or failure.
 
 Both commands inspect account/model metadata without starting a review or paid
-model turn. Provider authentication refresh occurs only in an owned isolated
-Codex control directory. Metadata diagnostics cannot guarantee that the provider
+model turn. Account metadata is read without proactive token refresh in an
+owned isolated Codex control directory. Metadata cannot guarantee that the provider
 will accept a later actual review. Selected installed skill files must be
 nonempty readable regular files of at most 1 MiB. Diagnostics do not certify
 review quality or execute instructions.

@@ -8,26 +8,32 @@ Windows support was explicitly removed by the operator on 2026-10-13.
 
 ## Current delivery
 
-The private Codex protocol adapter and sealed evidence broker are delivered.
-The current next batch adds setup, diagnostics, trusted configuration reads,
-resolution and explanation. It is not the finished application and does not
-implement GitHub discovery, inbox persistence, publication, notifications or
-the TUI yet. See [configuration and setup](CONFIGURATION.md).
+The private Codex protocol adapter, sealed evidence broker, setup, diagnostics
+and trusted configuration explanation are delivered. The current batch adds
+manual private review preparation, complete immutable source/context capture,
+SQLite run persistence, exact previews and checks-only refresh without another
+source/model review. It is not the finished application:
+discovery, scheduling/recovery, publication, notifications and the TUI remain
+outstanding. See [configuration and setup](CONFIGURATION.md) and
+[private reviews](REVIEWS.md).
 
 `internal/codex` starts a separate App Server with a private control directory,
 fresh workspace and a copied provider authentication file. It does not copy
 the user's Codex configuration, writable connectors or GitHub credentials.
 The selected installed skill is explicitly injected. Built-in command execution,
 apps, browser/computer use, image reading/generation, ambient skill discovery,
-plugins, hooks, memory and internal agent spawning are disabled; the review turn uses a
+plugins, hooks, memory and native agent spawning are disabled; the review turn uses a
 read-only, network-disabled sandbox. Permission expansion and write requests
 are declined. Only application-granted immutable source and evidence are
 available through the broker.
 
-The broker exposes source manifests and paginated text at named base/head
-revisions. Its inputs are frozen copies. It has no filesystem, shell, network
-or publisher capability. Later source acquisition must populate complete
-snapshots and explicitly retain binary/large-file evidence limitations.
+The broker exposes paged source manifests/text at named comparison-base,
+head and trusted-target revisions. Its inputs are frozen copies. It has no
+filesystem, shell, network or publisher capability. App-owned bare Git
+acquisition reconciles complete changed-file/commit counts and accounts for
+binary/large-file, submodule and LFS limitations. An optional app-owned
+specialist capability returns at most one independent sealed leaf report;
+the leaf cannot delegate again or obtain publisher capabilities.
 
 The protocol uses the experimental App Server dynamic-tool capability. The
 installed Codex version exercised during development is 0.162.1; compatibility
@@ -76,3 +82,30 @@ No provider account is needed for that check. The SDK batch at
 `8ce17e56f9d20fd397588a26fb99f757bfa40e3f` passed all four native hosted jobs in
 [run 38396971620](https://github.com/faustbrian/reviewd/actions/runs/38396971620).
 Those results do not certify later uncommitted CLI changes.
+
+Setup/configuration at `ab689855eb62a57e68741ab92b84279138f81c25` passed all four
+native hosted jobs in [run 38413412605](https://github.com/faustbrian/reviewd/actions/runs/38413412605).
+The current manual-review batch remains local pending final verification,
+independent review and delivery.
+
+A separate native CLI acceptance adapter used owned HTTP/Git fixtures and the
+actual authenticated Codex/installed `requesting-code-review` package. It found
+a seeded percentage-calculation defect, retained the exact canonical inline
+preview, kept proposed head publication preferences from granting authority,
+and exercised durable `show`/`inbox` after preparation. This proves the exercised
+private composition, not live GitHub acquisition/publication or every review
+quality partition. No GitHub review was posted.
+
+That acceptance exposed proactive token refresh in the metadata probe. A
+non-refresh read reported available account metadata while a forced refresh
+returned a null account; a separate actual SDK turn accepted cached credentials.
+Account diagnostics now avoid proactive refresh. Provider acceptance still
+belongs to the actual turn, not the metadata result.
+
+A later native adapter acceptance used the actual installed skill/model against
+a comment-only owned fixture. Captured CI failed, then passed before preparation;
+the model's identified check observation was superseded without losing its source
+conclusion. Two subsequent `refresh` commands changed failed/passed disposition
+while preserving the same primary thread/turn. Plain `show` and JSON `inbox`
+remained available. This is private native composition with owned Git/HTTP—not
+live GitHub acquisition/publication or a specialist-subprocess acceptance.

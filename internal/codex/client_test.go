@@ -123,6 +123,126 @@ func TestClientAcceptsCompleteResponseBeforePeerEOF(t *testing.T) {
 	}
 }
 
+// A duplex transport may report its request write failure after a complete
+// correlated response was received. Hold the reader open to isolate that
+// precedence from EOF selection, without sleeps or retry-based assertions.
+type responseBeforeWriteErrorReader struct {
+	net.Conn
+	reads          int
+	responseQueued chan struct{}
+}
+
+func (r *responseBeforeWriteErrorReader) Read(data []byte) (int, error) {
+	r.reads++
+	if r.reads == 2 {
+		close(r.responseQueued)
+	}
+	return r.Conn.Read(data)
+}
+
+type responseBeforeWriteErrorWriter struct {
+	net.Conn
+	responseQueued <-chan struct{}
+}
+
+func (w *responseBeforeWriteErrorWriter) Write(data []byte) (int, error) {
+	n, err := w.Conn.Write(data)
+	if err != nil {
+		return n, err
+	}
+	<-w.responseQueued
+	return n, io.ErrClosedPipe
+}
+
+func TestClientRetainsResponseWhenRequestWriteFinishesAfterResponse(t *testing.T) {
+	for _, rpcFailure := range []bool{false, true} {
+		local, remote := net.Pipe()
+		responseQueued := make(chan struct{})
+		reader := &responseBeforeWriteErrorReader{Conn: local, responseQueued: responseQueued}
+		writer := &responseBeforeWriteErrorWriter{Conn: local, responseQueued: responseQueued}
+		client := NewClient(reader, writer)
+		t.Cleanup(func() { _ = client.Close(); _ = remote.Close() })
+		go func() {
+			var request Message
+			if json.NewDecoder(remote).Decode(&request) != nil {
+				return
+			}
+			response := Message{ID: request.ID, Result: json.RawMessage(`{"value":"received"}`)}
+			if rpcFailure {
+				response.Result = nil
+				response.Error = &RPCError{Code: -32601, Message: "unsupported"}
+			}
+			_ = json.NewEncoder(remote).Encode(response)
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		var result struct {
+			Value string `json:"value"`
+		}
+		err := client.Call(ctx, "fixture", nil, &result)
+		cancel()
+		_ = client.Close()
+		if rpcFailure {
+			var rpcError *RPCError
+			if !errors.As(err, &rpcError) || rpcError.Code != -32601 {
+				t.Fatalf("RPC response lost to write failure: %v", err)
+			}
+		} else if err != nil || result.Value != "received" {
+			t.Fatalf("complete response lost to request write failure: %v %+v", err, result)
+		}
+	}
+}
+
+// Pause after the response bytes are read but before Scanner dispatches them.
+// Closing the owned reader releases that buffer, modelling a late write error
+// racing with a complete response rather than an already queued response.
+type bufferedResponseReader struct {
+	net.Conn
+	buffered     chan struct{}
+	release      chan struct{}
+	bufferedOnce sync.Once
+	closeOnce    sync.Once
+}
+
+func (r *bufferedResponseReader) Read(data []byte) (int, error) {
+	n, err := r.Conn.Read(data)
+	if n > 0 {
+		r.bufferedOnce.Do(func() { close(r.buffered) })
+		<-r.release
+	}
+	return n, err
+}
+
+func (r *bufferedResponseReader) Close() error {
+	r.closeOnce.Do(func() { close(r.release) })
+	return r.Conn.Close()
+}
+
+func TestClientRetainsBufferedResponseBeforeRequestWriteError(t *testing.T) {
+	local, remote := net.Pipe()
+	buffered := make(chan struct{})
+	reader := &bufferedResponseReader{Conn: local, buffered: buffered, release: make(chan struct{})}
+	writer := &responseBeforeWriteErrorWriter{Conn: local, responseQueued: buffered}
+	client := NewClient(reader, writer)
+	t.Cleanup(func() { _ = client.Close(); _ = remote.Close() })
+	go func() {
+		defer remote.Close()
+		var request Message
+		if json.NewDecoder(remote).Decode(&request) == nil {
+			_ = json.NewEncoder(remote).Encode(Message{ID: request.ID, Result: json.RawMessage(`{"value":"received"}`)})
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var result struct {
+		Value string `json:"value"`
+	}
+	err := client.Call(ctx, "fixture", nil, &result)
+	_ = client.Close()
+	if err != nil || result.Value != "received" {
+		t.Fatalf("buffered response lost to request write failure: %v %+v", err, result)
+	}
+}
+
 type observedWriter struct {
 	net.Conn
 	entered chan struct{}

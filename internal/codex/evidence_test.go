@@ -40,7 +40,13 @@ func TestEvidenceBrokerOnlyReadsFrozenGrantedEvidence(t *testing.T) {
 func TestEvidenceBrokerListsGrantedPathsAndHandlesEndOfFile(t *testing.T) {
 	broker := NewEvidenceBroker(map[string]map[string]string{"head": {"z.go": "line", "a.go": ""}}, nil)
 	paths, err := broker.Handle("reviewd_list_source", json.RawMessage(`{"revision":"head"}`))
-	if err != nil || paths != `["a.go","z.go"]` {
+	var manifest struct {
+		Paths []string `json:"paths"`
+		Total int      `json:"total_paths"`
+		EOF   bool     `json:"eof"`
+	}
+	decodeErr := json.Unmarshal([]byte(paths), &manifest)
+	if err != nil || decodeErr != nil || len(manifest.Paths) != 2 || manifest.Paths[0] != "a.go" || manifest.Paths[1] != "z.go" || manifest.Total != 2 || !manifest.EOF {
 		t.Fatalf("invalid source manifest: %q %v", paths, err)
 	}
 	result, err := broker.Handle("reviewd_read_source", json.RawMessage(`{"revision":"head","path":"z.go","offset":10}`))

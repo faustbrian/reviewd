@@ -3,6 +3,7 @@
 package github
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -126,7 +127,24 @@ func FromCLI(ctx context.Context, host string) (*Client, error) {
 }
 func (c *Client) get(ctx context.Context, path string, target any) error {
 	endpoint := strings.TrimRight(c.endpoint.String(), "/") + "/" + strings.TrimLeft(path, "/")
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return c.readRequest(ctx, http.MethodGet, endpoint, nil, target)
+}
+
+func (c *Client) getPage(ctx context.Context, path string, target any) (http.Header, error) {
+	endpoint := strings.TrimRight(c.endpoint.String(), "/") + "/" + strings.TrimLeft(path, "/")
+	var headers http.Header
+	err := c.readRequestWithHeaders(ctx, http.MethodGet, endpoint, nil, target, &headers)
+	return headers, err
+}
+
+// readRequest is used only by application-owned GET endpoints and fixed
+// GraphQL read queries. It is not a model-visible arbitrary request tool.
+func (c *Client) readRequest(ctx context.Context, method, endpoint string, payload []byte, target any) error {
+	return c.readRequestWithHeaders(ctx, method, endpoint, payload, target, nil)
+}
+
+func (c *Client) readRequestWithHeaders(ctx context.Context, method, endpoint string, payload []byte, target any, headers *http.Header) error {
+	request, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return errors.New("invalid GitHub read request")
 	}
@@ -134,6 +152,9 @@ func (c *Client) get(ctx context.Context, path string, target any) error {
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	request.Header.Set("User-Agent", "reviewd")
+	if payload != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
 	response, err := c.http.Do(request)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -142,6 +163,9 @@ func (c *Client) get(ctx context.Context, path string, target any) error {
 		return errors.New("GitHub read request failed; check network access and configured host")
 	}
 	defer response.Body.Close()
+	if headers != nil {
+		*headers = response.Header.Clone()
+	}
 	if response.StatusCode != http.StatusOK {
 		retry := time.Duration(0)
 		if seconds, err := strconv.ParseUint(response.Header.Get("Retry-After"), 10, 64); err == nil && seconds > 0 {

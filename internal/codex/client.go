@@ -38,17 +38,18 @@ type Client struct {
 	err       error
 	events    chan Message
 	done      chan struct{}
+	readDone  chan struct{}
 	closeOnce sync.Once
 }
 
 func NewClient(reader io.Reader, writer io.Writer) *Client {
-	c := &Client{reader: reader, writer: writer, pending: make(map[string]chan Message), events: make(chan Message, 128), done: make(chan struct{})}
+	c := &Client{reader: reader, writer: writer, pending: make(map[string]chan Message), events: make(chan Message, 128), done: make(chan struct{}), readDone: make(chan struct{})}
 	go c.read()
 	return c
 }
 
 func (c *Client) read() {
-	defer close(c.events)
+	defer func() { close(c.events); close(c.readDone) }()
 	scanner := bufio.NewScanner(c.reader)
 	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	for scanner.Scan() {
@@ -68,8 +69,6 @@ func (c *Client) read() {
 			if receiver != nil {
 				select {
 				case receiver <- message:
-				case <-c.done:
-					return
 				default:
 					// Duplicate responses must not strand the stream reader.
 				}
@@ -79,7 +78,9 @@ func (c *Client) read() {
 		select {
 		case c.events <- message:
 		case <-c.done:
-			return
+			// Ignore terminal progress but drain already-buffered frames so a
+			// later correlated response cannot be discarded during shutdown.
+			continue
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -192,23 +193,35 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 	c.pending[id] = receiver
 	c.mu.Unlock()
 	defer func() { c.mu.Lock(); delete(c.pending, id); c.mu.Unlock() }()
+	finishTerminal := func(transportErr error) error {
+		// Closing an owned stream unblocks its reader. Wait for that reader
+		// to dispatch any complete buffered response before dropping the
+		// correlation; context cancellation remains independently bounded.
+		select {
+		case <-c.readDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		select {
+		case message := <-receiver:
+			return decodeResponse(method, message, result)
+		default:
+			return transportErr
+		}
+	}
 	written := make(chan error, 1)
 	go func() { written <- c.send(Message{ID: json.RawMessage(id), Method: method, Params: encoded}) }()
 	select {
 	case err := <-written:
 		if err != nil {
-			return err
+			c.fail(err)
+			return finishTerminal(err)
 		}
 	case <-ctx.Done():
 		c.fail(ctx.Err())
 		return ctx.Err()
 	case <-c.done:
-		select {
-		case message := <-receiver:
-			return decodeResponse(method, message, result)
-		default:
-			return c.Err()
-		}
+		return finishTerminal(c.Err())
 	}
 	select {
 	case message := <-receiver:
@@ -216,12 +229,7 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-c.done:
-		select {
-		case message := <-receiver:
-			return decodeResponse(method, message, result)
-		default:
-			return c.Err()
-		}
+		return finishTerminal(c.Err())
 	}
 }
 

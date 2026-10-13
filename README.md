@@ -4,8 +4,9 @@ A personal, local-first GitHub review inbox backed by Codex.
 
 Implementation is in progress. The complete user-authorized scope is recorded
 in [the specification](docs/SPECIFICATION.md). The initial private Codex adapter
-is implemented. Setup, diagnostics and configuration explanation are available;
-the watcher, review/publication commands and inbox are not yet available.
+is implemented. Setup, diagnostics, configuration explanation and private
+review preparation with a durable local run inbox are available. Monitoring,
+publication, notifications and the TUI are still being implemented.
 
 See [implementation boundaries](docs/IMPLEMENTATION.md) for the current scope
 and [acceptance tracking](docs/ACCEPTANCE.md) for outstanding product work.
@@ -21,10 +22,15 @@ reviewd init
 reviewd doctor --json
 reviewd config explain shipitfi/api --offline
 reviewd completion zsh
+reviewd review https://github.com/owner/repo/pull/17 --private
+reviewd inbox --json
+reviewd show <run-id>
 ```
 
 Initialization never chooses repositories, enables automatic publication or
 installs an OS service. Offline explanation requires no account access.
+Private preparation does not grant publication, including on projects whose
+normal publication policy is automatic. See [private reviews](docs/REVIEWS.md).
 
 ## Development
 

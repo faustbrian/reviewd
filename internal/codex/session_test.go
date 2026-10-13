@@ -106,7 +106,7 @@ func TestAccountDiagnosticsRejectMissingAuthenticationWithoutStartingTurn(t *tes
 		cancel()
 		_ = client.Close()
 		request := <-done
-		if request.Method != "account/read" || !strings.Contains(string(request.Params), `"refreshToken":true`) {
+		if request.Method != "account/read" || !strings.Contains(string(request.Params), `"refreshToken":false`) {
 			t.Fatalf("diagnostics did not use account discovery: %+v", request)
 		}
 		if (response == `{"account":{"type":"apiKey"},"requiresOpenaiAuth":true}`) != (err == nil) {
