@@ -45,3 +45,6 @@ python3 scripts/check.py
 
 Ordinary checks are offline. The opt-in live Codex fixture requires a separately
 installed, authenticated Codex CLI and does not write to GitHub.
+
+Discovery and durable inbox commands are described in [discovery](docs/DISCOVERY.md).
+One-shot synchronization does not run reviews; continuous automation remains in progress.

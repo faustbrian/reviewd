@@ -184,23 +184,7 @@ func (e *execution) inboxCommand() *cobra.Command {
 			return failure(1, err.Error())
 		}
 		defer durable.Close()
-		runs, err := durable.List(command.Context())
-		if err != nil {
-			return failure(1, err.Error())
-		}
-		if e.json {
-			data, _ := json.Marshal(runs)
-			safe := redact(string(data))
-			return writeJSON(command.OutOrStdout(), map[string]any{"schema_version": 1, "runs": json.RawMessage(safe), "redacted": safe != string(data)})
-		}
-		if len(runs) == 0 {
-			_, err = fmt.Fprintln(command.OutOrStdout(), "No local review runs. Monitoring is not enabled by this command.")
-			return err
-		}
-		for _, run := range runs {
-			fmt.Fprintf(command.OutOrStdout(), "%s  %q #%d  %s\n", run.ID, redact(run.Repository), run.Number, run.State)
-		}
-		return nil
+		return e.presentInbox(command.Context(), command.OutOrStdout(), durable)
 	}
 	return command
 }

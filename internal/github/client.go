@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/faustbrian/reviewd/internal/config"
@@ -30,10 +31,12 @@ type Options struct {
 	HTTPClient *http.Client
 }
 type Client struct {
-	host     string
-	endpoint *url.URL
-	token    string
-	http     *http.Client
+	host          string
+	endpoint      *url.URL
+	token         string
+	http          *http.Client
+	discoveryOnce sync.Once
+	discoveryHTTP *http.Client
 }
 type Identity struct {
 	ID    int64  `json:"id"`

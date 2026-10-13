@@ -13,7 +13,7 @@ and trusted configuration explanation are delivered. Manual private review
 preparation, complete immutable source/context capture, SQLite run persistence,
 exact previews and checks-only refresh without another source/model review are
 delivered at `b8a4fd46aa7165e66e5042f11bd2aebe1c5737db`. It is not the finished application:
-discovery, scheduling/recovery, notifications and the TUI remain
+continuous polling, scheduling/recovery, notifications and the TUI remain
 outstanding. See [configuration and setup](CONFIGURATION.md) and
 [private reviews](REVIEWS.md). Explicit publication, duplicate references,
 readback and partial repair are implemented with owned Git/HTTP journey checks;
@@ -119,3 +119,7 @@ conclusion. Two subsequent `refresh` commands changed failed/passed disposition
 while preserving the same primary thread/turn. Plain `show` and JSON `inbox`
 remained available. This is private native composition with owned Git/HTTP—not
 live GitHub acquisition/publication or a specialist-subprocess acceptance.
+
+One-shot allowlisted discovery and a durable inbox are now wired through `sync`,
+`inbox`, `follow`, and `unfollow`; see [discovery](DISCOVERY.md). This does not
+claim completion of continuous scheduling, notifications, or terminal attachment.

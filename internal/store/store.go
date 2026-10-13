@@ -110,7 +110,7 @@ func Open(ctx context.Context, directory string) (store *Store, err error) {
 	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return nil, errors.New("cannot read state database schema")
 	}
-	if version > 1 {
+	if version > 2 {
 		return nil, errors.New("state database uses a newer schema; upgrade reviewd without replacing the database")
 	}
 	if version == 0 {
@@ -142,6 +142,11 @@ PRAGMA user_version=1;`)
 		}
 		if err = tx.Commit(); err != nil {
 			return nil, errors.New("cannot commit state schema")
+		}
+	}
+	if version < 2 {
+		if err = store.migrateDiscovery(ctx); err != nil {
+			return nil, err
 		}
 	}
 	return store, nil

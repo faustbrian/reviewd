@@ -21,6 +21,29 @@ type ReviewContext struct {
 	Gaps         []string          `json:"gaps"`
 	Digest       string            `json:"digest"`
 }
+
+// DiscoveryDigest identifies controlling context for event coalescing. Request
+// additions/removals have their own per-PR event identity and eligibility owner;
+// they must not additionally masquerade as a changed requirement. Complete raw
+// evidence and Digest remain untouched for private review and publication.
+func (c ReviewContext) DiscoveryDigest() string {
+	timeline := []json.RawMessage{}
+	for _, raw := range c.Timeline {
+		var event struct {
+			Kind string `json:"event"`
+		}
+		if json.Unmarshal(raw, &event) == nil && (event.Kind == "review_requested" || event.Kind == "review_request_removed") {
+			continue
+		}
+		timeline = append(timeline, raw)
+	}
+	c.Timeline = timeline
+	c.Digest = ""
+	data, _ := json.Marshal(c)
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
 type ReviewThread struct {
 	ID         string     `json:"id"`
 	IsResolved *bool      `json:"isResolved"`
