@@ -15,6 +15,8 @@ type MandatoryCheck struct {
 	Name          string `json:"name"`
 	IntegrationID int64  `json:"integration_id,omitempty"`
 	State         string `json:"state"`
+	Conclusion    string `json:"conclusion,omitempty"`
+	DetailsURL    string `json:"details_url,omitempty"`
 	Evidence      string `json:"evidence,omitempty"`
 	Detail        string `json:"detail,omitempty"`
 }
@@ -46,14 +48,16 @@ type checkRun struct {
 	HeadSHA    string  `json:"head_sha"`
 	Status     string  `json:"status"`
 	Conclusion *string `json:"conclusion"`
+	DetailsURL string  `json:"details_url"`
 	App        struct {
 		ID int64 `json:"id"`
 	} `json:"app"`
 }
 type commitStatus struct {
-	ID      int64  `json:"id"`
-	Context string `json:"context"`
-	State   string `json:"state"`
+	ID        int64  `json:"id"`
+	Context   string `json:"context"`
+	State     string `json:"state"`
+	TargetURL string `json:"target_url"`
 }
 
 func unavailableChecks(head, detail string) CheckReport {
@@ -216,16 +220,22 @@ func (c *Client) Checks(ctx context.Context, pull Pull) (CheckReport, error) {
 			}
 			if latestRun.ID > 0 {
 				check.State = checkRunState(latestRun)
+				if latestRun.Conclusion != nil {
+					check.Conclusion = *latestRun.Conclusion
+				}
+				check.DetailsURL = latestRun.DetailsURL
 				check.Detail = "GitHub check-run evidence."
 				components = []MandatoryCheck{check}
 				if latestStatus.ID > 0 {
 					// GitHub requires both same-name sources to settle; a passed run
 					// cannot hide a failed or pending legacy status (or vice versa).
-					components = append(components, MandatoryCheck{Name: check.Name, Evidence: "commit_status", State: commitStatusState(latestStatus), Detail: "Legacy commit-status evidence."})
+					components = append(components, MandatoryCheck{Name: check.Name, Evidence: "commit_status", State: commitStatusState(latestStatus), Conclusion: latestStatus.State, DetailsURL: latestStatus.TargetURL, Detail: "Legacy commit-status evidence."})
 				}
 			} else if check.IntegrationID == 0 && latestStatus.ID > 0 {
 				check.Evidence = "commit_status"
 				check.State = commitStatusState(latestStatus)
+				check.Conclusion = latestStatus.State
+				check.DetailsURL = latestStatus.TargetURL
 				check.Detail = "Legacy commit-status evidence."
 				components = []MandatoryCheck{check}
 			} else {

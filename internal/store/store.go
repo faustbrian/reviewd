@@ -321,13 +321,20 @@ func (s *Store) DecidePublication(ctx context.Context, id, payloadID string) err
 	result, err := s.db.ExecContext(ctx, `INSERT INTO publication_decisions(run_id,payload_id,decided_at) SELECT id,payload_id,? FROM runs WHERE id=? AND payload_id=? AND state='prepared' ON CONFLICT(run_id,payload_id) DO UPDATE SET decided_at=excluded.decided_at`, timestamp(), id, payloadID)
 	return changed(result, err, "publication decision does not match the current prepared preview")
 }
-func (s *Store) BeginPublication(ctx context.Context, id, payloadID string) (string, bool, error) {
+func (s *Store) BeginPublication(ctx context.Context, id, payloadID string, initial ...json.RawMessage) (string, bool, error) {
+	outcome := "{}"
+	if len(initial) > 1 || (len(initial) == 1 && !json.Valid(initial[0])) {
+		return "", false, errors.New("invalid initial publication observation")
+	}
+	if len(initial) == 1 {
+		outcome = string(initial[0])
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", false, errors.New("cannot begin publication claim")
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `UPDATE runs SET state='publishing',updated_at=? WHERE id=? AND payload_id=? AND state='prepared' AND EXISTS(SELECT 1 FROM publication_decisions WHERE run_id=runs.id AND payload_id=runs.payload_id)`, timestamp(), id, payloadID)
+	result, err := tx.ExecContext(ctx, `UPDATE runs SET state='publishing',outcome=?,updated_at=? WHERE id=? AND payload_id=? AND state='prepared' AND EXISTS(SELECT 1 FROM publication_decisions WHERE run_id=runs.id AND payload_id=runs.payload_id)`, outcome, timestamp(), id, payloadID)
 	if err != nil {
 		return "", false, errors.New("cannot claim exact-payload publication")
 	}
@@ -350,12 +357,25 @@ func (s *Store) BeginPublication(ctx context.Context, id, payloadID string) (str
 	}
 	return attempt, true, nil
 }
-func (s *Store) MarkOutcome(ctx context.Context, id string, state State, outcome json.RawMessage) error {
+
+var ErrOutcomeChanged = errors.New("publication state changed concurrently; reconcile its current claim")
+
+func (s *Store) MarkOutcome(ctx context.Context, observed Run, state State, outcome json.RawMessage) error {
 	if (state != Published && state != PublicationUnknown && state != Partial && state != Stale) || !json.Valid(outcome) {
 		return errors.New("invalid publication outcome")
 	}
-	result, err := s.db.ExecContext(ctx, "UPDATE runs SET state=?,outcome=?,updated_at=? WHERE id=? AND state IN ('publishing','publication_unknown','partial')", state, string(outcome), timestamp(), id)
-	return changed(result, err, "could not persist reconciled publication outcome")
+	result, err := s.db.ExecContext(ctx, "UPDATE runs SET state=?,outcome=?,updated_at=? WHERE id=? AND payload_id=? AND state=? AND COALESCE(outcome,'')=? AND (state IN ('publishing','publication_unknown','partial') OR (state='published' AND ? IN ('published','stale')))", state, string(outcome), timestamp(), observed.ID, observed.PayloadID, observed.State, string(observed.Outcome), state)
+	if err != nil {
+		return errors.New("could not persist reconciled publication outcome")
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return ErrOutcomeChanged
+	}
+	return nil
 }
 func (s *Store) Fail(ctx context.Context, id string, state State, message string) error {
 	if state != Failed && state != Cancelled && state != Stale {
@@ -363,4 +383,34 @@ func (s *Store) Fail(ctx context.Context, id string, state State, message string
 	}
 	result, err := s.db.ExecContext(ctx, "UPDATE runs SET state=?,failure=?,updated_at=? WHERE id=? AND state IN ('queued','reviewing','prepared')", state, message, timestamp(), id)
 	return changed(result, err, "could not persist interrupted or stale review")
+}
+
+// BeginRepair binds an explicit new decision to one missing finding and records
+// its recovery intent transactionally before the application performs a write.
+func (s *Store) BeginRepair(ctx context.Context, observed Run, payloadID string, outcome json.RawMessage) (bool, error) {
+	if !json.Valid(outcome) {
+		return false, errors.New("invalid repair intent")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, "UPDATE runs SET state='publishing',outcome=?,updated_at=? WHERE id=? AND payload_id=? AND state='partial' AND COALESCE(outcome,'')=?", string(outcome), timestamp(), observed.ID, payloadID, string(observed.Outcome))
+	if err != nil {
+		return false, err
+	}
+	count, err := result.RowsAffected()
+	if err != nil || count != 1 {
+		return false, err
+	}
+	attempt, err := newID()
+	if err != nil {
+		return false, err
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO publication_attempts(id,run_id,payload_id,started_at) VALUES(?,?,?,?)", attempt, observed.ID, payloadID, timestamp()); err != nil {
+		return false, err
+	}
+	err = tx.Commit()
+	return err == nil, err
 }

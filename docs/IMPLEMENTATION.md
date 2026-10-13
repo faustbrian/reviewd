@@ -13,9 +13,11 @@ and trusted configuration explanation are delivered. Manual private review
 preparation, complete immutable source/context capture, SQLite run persistence,
 exact previews and checks-only refresh without another source/model review are
 delivered at `b8a4fd46aa7165e66e5042f11bd2aebe1c5737db`. It is not the finished application:
-discovery, scheduling/recovery, publication, notifications and the TUI remain
+discovery, scheduling/recovery, notifications and the TUI remain
 outstanding. See [configuration and setup](CONFIGURATION.md) and
-[private reviews](REVIEWS.md).
+[private reviews](REVIEWS.md). Explicit publication, duplicate references,
+readback and partial repair are implemented with owned Git/HTTP journey checks;
+see [publication and recovery](PUBLICATION.md). Live publication is unverified.
 
 `internal/codex` starts a separate App Server with a private control directory,
 fresh workspace and a copied provider authentication file. It does not copy

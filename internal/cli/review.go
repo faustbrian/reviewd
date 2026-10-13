@@ -252,6 +252,27 @@ func (e *execution) presentRun(output io.Writer, run store.Run) error {
 	if run.Failure != "" {
 		fmt.Fprintln(output, terminalText(run.Failure))
 	}
+	if len(run.Outcome) > 0 {
+		var outcome review.PublicationOutcome
+		if json.Unmarshal(run.Outcome, &outcome) != nil {
+			return failure(1, "stored publication outcome is invalid; preserve the profile for recovery")
+		}
+		verified := "not verified"
+		if outcome.Verified {
+			verified = "verified"
+		}
+		fmt.Fprintf(output, "Stored GitHub readback: %s\n", verified)
+		if outcome.Review.URL != "" {
+			fmt.Fprintf(output, "Recorded review: %s (%s)\n", terminalText(outcome.Review.URL), terminalText(outcome.Review.State))
+		}
+		for _, comment := range outcome.Comments {
+			fmt.Fprintf(output, "Recorded inline: %s\n", terminalText(comment.URL))
+		}
+		fmt.Fprintf(output, "Reviewed head: %s\nCurrent head: %s\n", terminalText(outcome.ReviewedHead), terminalText(outcome.CurrentHead))
+		if outcome.Failure != "" {
+			fmt.Fprintln(output, terminalText(outcome.Failure))
+		}
+	}
 	if len(run.Prepared) > 0 {
 		var preview struct {
 			Event    string           `json:"event"`

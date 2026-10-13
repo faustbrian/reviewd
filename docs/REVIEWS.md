@@ -1,8 +1,9 @@
 # Private reviews and exact previews
 
 The development version currently supports manual private preparation, a
-durable run inbox and exact preview. The publisher, automatic watcher,
-notifications and terminal UI are not available yet. A prepared review is not
+durable run inbox and exact preview. Explicit publication and reconciliation
+are described in [publication and recovery](PUBLICATION.md). The automatic
+watcher, notifications and terminal UI are not available yet. A prepared review is not
 a posted review or formal GitHub approval.
 
 ## Commands
@@ -27,8 +28,8 @@ and another host are rejected before authenticated acquisition.
 
 The development command requires `--private`. Preparation never posts to
 GitHub, even if the project is configured for automatic publication. That flag
-suppresses automatic publication; the intended later `publish` command will
-require a fresh explicit decision for the exact prepared payload, subject to
+suppresses automatic publication; the `publish` command requires
+a fresh explicit decision for the exact prepared payload, subject to
 the operator's publication policy.
 
 Pending mandatory checks leave durable `waiting_checks` work without starting
@@ -121,7 +122,9 @@ Directories must be private (0700), and the database a private regular file
 (0600); symlink database paths are rejected. SQLite transactions and uniqueness
 constraints retain queued/waiting, reviewing, prepared and failed/cancelled
 states across independent clients. Exact-payload publication claims and unknown
-outcomes are distinct stored states, but no live publisher is implemented yet.
+outcomes are distinct stored states. Explicit publication persists attempts
+before writes and verifies remote identities; real GitHub acceptance remains
+outstanding.
 
 A run retains frozen configuration/provenance, relevant context/skill identity,
 review revisions, exact preview, available model/usage and thread/turn metadata.

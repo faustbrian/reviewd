@@ -209,7 +209,7 @@ func Run(ctx context.Context, args []string, output, diagnostics io.Writer, deps
 	configure.AddCommand(explain)
 	root.AddCommand(configure)
 	root.AddCommand(options.doctorCommand(deps), options.initCommand(deps))
-	root.AddCommand(options.reviewCommand(deps), options.refreshCommand(deps), options.showCommand(), options.inboxCommand())
+	root.AddCommand(options.reviewCommand(deps), options.refreshCommand(deps), options.publishCommand(deps), options.showCommand(), options.inboxCommand())
 	completion := &cobra.Command{Use: "completion <bash|zsh|fish>", Short: "Print shell completion without installing it", Args: cobra.ExactArgs(1)}
 	completion.RunE = func(command *cobra.Command, args []string) error {
 		switch args[0] {

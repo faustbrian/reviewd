@@ -82,3 +82,33 @@ func TestSourceUncertaintySurvivesSettledCheckObservation(t *testing.T) {
 		t.Fatalf("settled CI erased source uncertainty: disposition=%s event=%s body=%q error=%v", result.Disposition, result.Event, result.Body, err)
 	}
 }
+
+func TestReadinessPreviewPreservesDistinctMandatoryIdentities(t *testing.T) {
+	head := strings.Repeat("b", 40)
+	boundary := Boundary{Pull: github.Pull{HeadSHA: head, Author: github.Identity{ID: 42}}, Actor: github.Identity{ID: 43}, Checks: github.CheckReport{HeadSHA: head, Checks: []github.MandatoryCheck{
+		{Name: "quality", IntegrationID: 55, State: "failed"},
+		{Name: "quality extended", State: "missing"},
+	}}}
+	result, err := Prepare(boundary, Report{Conclusion: "APPROVE", Findings: []Finding{}, Gaps: []ResultGap{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Gaps) != 2 || !strings.Contains(result.Gaps[0].Detail, "`quality [app_id=55]`") || !strings.Contains(result.Gaps[1].Detail, "`quality extended`") {
+		t.Fatalf("mandatory identities omitted or conflated: %+v", result.Gaps)
+	}
+	for _, gap := range result.Gaps {
+		if !strings.Contains(gap.Detail, head) {
+			t.Fatal("mandatory gap omitted complete pinned head")
+		}
+	}
+}
+
+func TestEarlierPrivatePreviewRemainsValidForEvidencePreservingRefresh(t *testing.T) {
+	boundary := Boundary{Pull: github.Pull{HeadSHA: strings.Repeat("b", 40), Author: github.Identity{ID: 42}}, Actor: github.Identity{ID: 43}, Checks: github.CheckReport{Ready: false, Checks: []github.MandatoryCheck{{Name: "quality", State: "failed", Detail: "GitHub check-run evidence."}}}}
+	gap := ResultGap{Kind: "readiness", Detail: "Required check quality: failed. GitHub check-run evidence."}
+	old := PreparedResult{SchemaVersion: 1, Boundary: boundary, Report: Report{Conclusion: "APPROVE", Findings: []Finding{}, Gaps: []ResultGap{}}, Disposition: "REQUEST_CHANGES", Event: "REQUEST_CHANGES", Body: "**Not ready.**\n\n" + gap.Detail, Comments: []Comment{}, Gaps: []ResultGap{gap}}
+	old.PayloadID = digest(old)
+	if err := ValidatePrepared(old); err != nil {
+		t.Fatalf("previously valid private evidence cannot refresh without another review: %v", err)
+	}
+}

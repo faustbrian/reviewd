@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/faustbrian/reviewd/internal/config"
@@ -40,17 +41,23 @@ type SkillIdentity struct {
 	Name   string `json:"name"`
 	Digest string `json:"digest"`
 }
+type ExistingFinding struct {
+	Key       string `json:"key"`
+	CommentID int64  `json:"comment_id"`
+	URL       string `json:"url"`
+}
 type Boundary struct {
-	Pull          github.Pull        `json:"pull"`
-	Actor         github.Identity    `json:"actor"`
-	MergeBaseSHA  string             `json:"merge_base_sha"`
-	ContextDigest string             `json:"context_digest"`
-	Configuration config.Snapshot    `json:"configuration"`
-	Skill         SkillIdentity      `json:"skill"`
-	Checks        github.CheckReport `json:"checks"`
-	Anchors       source.AnchorSet   `json:"anchors"`
-	SourceGaps    []source.Gap       `json:"source_gaps"`
-	ContextGaps   []string           `json:"context_gaps"`
+	ExistingFindings []ExistingFinding  `json:"existing_findings,omitempty"`
+	Pull             github.Pull        `json:"pull"`
+	Actor            github.Identity    `json:"actor"`
+	MergeBaseSHA     string             `json:"merge_base_sha"`
+	ContextDigest    string             `json:"context_digest"`
+	Configuration    config.Snapshot    `json:"configuration"`
+	Skill            SkillIdentity      `json:"skill"`
+	Checks           github.CheckReport `json:"checks"`
+	Anchors          source.AnchorSet   `json:"anchors"`
+	SourceGaps       []source.Gap       `json:"source_gaps"`
+	ContextGaps      []string           `json:"context_gaps"`
 }
 type Comment struct {
 	Path string `json:"path"`
@@ -111,13 +118,20 @@ func DecodeReport(text string) (Report, error) {
 }
 
 func Prepare(boundary Boundary, report Report) (PreparedResult, error) {
+	return prepareVersion(boundary, report, 2)
+}
+
+func prepareVersion(boundary Boundary, report Report, version int) (PreparedResult, error) {
+	if version == 1 && len(boundary.ExistingFindings) > 0 {
+		return PreparedResult{}, errors.New("legacy prepared review cannot contain publication references")
+	}
 	if report.Conclusion != "APPROVE" && report.Conclusion != "REQUEST_CHANGES" && report.Conclusion != "INCONCLUSIVE" {
 		return PreparedResult{}, errors.New("reviewer returned no supported internal disposition")
 	}
 	if !publicationText(report.Summary) {
 		return PreparedResult{}, errors.New("review summary contains credential-shaped or unsafe publication text; keep sensitive evidence private")
 	}
-	result := PreparedResult{SchemaVersion: 1, Boundary: boundary, Report: report, Comments: []Comment{}, Gaps: []ResultGap{}}
+	result := PreparedResult{SchemaVersion: version, Boundary: boundary, Report: report, Comments: []Comment{}, Gaps: []ResultGap{}}
 	blocker, readiness, inconclusive, actions := false, false, false, false
 	checkReason := false
 	knownCheck := func(name string) bool {
@@ -138,6 +152,17 @@ func Prepare(boundary Boundary, report Report) (PreparedResult, error) {
 		}
 		result.Gaps = append(result.Gaps, gap)
 	}
+	references := map[string]ExistingFinding{}
+	for _, existing := range boundary.ExistingFindings {
+		if existing.CommentID <= 0 || len(existing.Key) != 64 || !reviewURL(existing.URL, boundary.Pull.URL, "discussion_r", existing.CommentID) {
+			return PreparedResult{}, errors.New("existing finding reference has an invalid canonical identity")
+		}
+		if _, duplicate := references[existing.Key]; duplicate {
+			return PreparedResult{}, errors.New("duplicate existing finding reference")
+		}
+		references[existing.Key] = existing
+	}
+	referenced := []ExistingFinding{}
 	seen := map[string]bool{}
 	labels := map[string]string{"blocker": "**Blocker:**", "readiness_gap": "**Readiness gap:**", "action": "**Action requested:**", "question": "**Question:**", "suggestion": "**Suggestion:**"}
 	for _, finding := range report.Findings {
@@ -158,7 +183,11 @@ func Prepare(boundary Boundary, report Report) (PreparedResult, error) {
 			return PreparedResult{}, errors.New("reviewer returned duplicate canonical findings")
 		}
 		seen[comment.Key] = true
-		result.Comments = append(result.Comments, comment)
+		if existing, found := references[comment.Key]; found {
+			referenced = append(referenced, existing)
+		} else {
+			result.Comments = append(result.Comments, comment)
+		}
 		switch finding.Kind {
 		case "blocker":
 			blocker = true
@@ -170,6 +199,9 @@ func Prepare(boundary Boundary, report Report) (PreparedResult, error) {
 			actions = true
 		}
 	}
+	if len(referenced) != len(references) {
+		return PreparedResult{}, errors.New("existing finding reference does not match a source finding")
+	}
 	for _, gap := range boundary.SourceGaps {
 		result.Gaps = append(result.Gaps, ResultGap{Kind: "source", Detail: gap.Revision + " " + gap.Path + ": " + gap.Reason})
 	}
@@ -180,7 +212,19 @@ func Prepare(boundary Boundary, report Report) (PreparedResult, error) {
 		readiness = true
 		for _, check := range boundary.Checks.Checks {
 			if check.State != "passed" {
-				result.Gaps = append(result.Gaps, ResultGap{Kind: "readiness", Detail: "Required check " + check.Name + ": " + check.State + ". " + check.Detail})
+				name := check.Name
+				if check.IntegrationID > 0 {
+					name += " [app_id=" + strconv.FormatInt(check.IntegrationID, 10) + "]"
+				}
+				conclusion := check.Conclusion
+				if conclusion == "" {
+					conclusion = check.State
+				}
+				detail := "**Readiness gap:** Required check `" + name + "`: " + conclusion + " (" + check.State + ") at head " + boundary.Pull.HeadSHA + ". " + check.Detail
+				if version == 1 {
+					detail = "Required check " + check.Name + ": " + check.State + ". " + check.Detail
+				}
+				result.Gaps = append(result.Gaps, ResultGap{Kind: "readiness", Detail: detail})
 			}
 		}
 		if len(boundary.Checks.Checks) == 0 {
@@ -239,16 +283,19 @@ func Prepare(boundary Boundary, report Report) (PreparedResult, error) {
 	for _, gap := range result.Gaps {
 		body.WriteString("\n\n" + gap.Detail)
 	}
+	for _, existing := range referenced {
+		body.WriteString("\n\nExisting finding: [continue the original conversation](" + existing.URL + ").")
+	}
 	result.Body = body.String()
 	result.PayloadID = digest(result)
 	return result, nil
 }
 
 func ValidatePrepared(result PreparedResult) error {
-	if result.SchemaVersion != 1 {
+	if result.SchemaVersion != 1 && result.SchemaVersion != 2 {
 		return errors.New("prepared review uses an unsupported schema")
 	}
-	current, err := Prepare(result.Boundary, result.Report)
+	current, err := prepareVersion(result.Boundary, result.Report, result.SchemaVersion)
 	if err != nil {
 		return err
 	}
