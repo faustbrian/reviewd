@@ -18,10 +18,10 @@ The exact numbering refers to section 16 of the specification.
 | 10 | Ask remains pending without an attached terminal | Not implemented |
 | 11 | Notification expiry never authorizes action | Not implemented |
 | 12 | Initial sync does not process the backlog automatically | Not implemented |
-| 13 | Proposed repository config cannot expand authority | Not implemented; sealed broker is a prerequisite |
-| 14 | Field-level override/provenance resolution | Not implemented |
-| 15 | Invalid reload preserves the last valid config | Not implemented |
-| 16 | Missing prerequisites produce actionable errors | Partial: runtime startup and model/effort errors |
+| 13 | Proposed repository config cannot expand authority | Partial: narrow preference whitelist and pinned default-branch reads; actual PR target-base wiring outstanding |
+| 14 | Field-level override/provenance resolution | Resolver and CLI verified: field merge, list replacement, false/zero, exact projects, frozen serialized provenance; run wiring outstanding |
+| 15 | Invalid reload preserves the last valid config | Manager verified: invalid full reload retains valid document and old snapshots; watcher wiring outstanding |
+| 16 | Missing prerequisites produce actionable errors | Setup/doctor verified with fixtures and hands-on real account metadata; actual review/provider failures remain a separate boundary |
 | 17 | Mandatory check states classified accurately | Not implemented |
 | 18 | Interrupted/malformed workers never become clean reviews | Partial: protocol EOF/malformed-response tests |
 | 19 | Own-PR feedback grants no fix authority | Not implemented |
@@ -35,9 +35,15 @@ The exact numbering refers to section 16 of the specification.
 | 27 | Owned snapshots/process trees clean up safely | Partial: runtime setup/failure/cancellation checks |
 | 28 | TUI resize/keyboard/native selection/restoration | Not implemented |
 | 29 | Headless and JSON expose the same workflow states | Not implemented |
-| 30 | Platform builds and native runtime match claims | Partial: target compilation; hosted/native acceptance pending |
+| 30 | Platform builds and native runtime match claims | Partial: SDK target builds plus native capability CI passed on 8ce17e5; current CLI batch/platform UX still pending final checks |
 
 Named commands, discovery completeness, full review evidence, selected review
 skill quality, publication preflight, configuration validation, retry budgets,
 retention, installation and distribution documentation remain in scope beyond
 this table. They must be audited before declaring the complete goal achieved.
+
+The current CLI's hands-on acceptance used task-owned configuration/binary
+storage, the existing Codex account, and read-only GitHub access to
+`faustbrian/reviewd`. Initialization, doctor, online/offline explanation, safe
+repeat initialization and bash/zsh/fish completion were exercised. This did
+not start a review or publish anything; it is not full vertical-slice acceptance.

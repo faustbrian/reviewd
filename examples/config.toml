@@ -1,0 +1,43 @@
+# Illustrative explicit policies; init creates an empty allowlist instead.
+schema_version = 1
+
+[github]
+host = "github.com"
+repositories = ["shipitfi/api", "shipitfi/bill"]
+watch_review_requests = true
+watch_own_prs = true
+
+[watch]
+poll_interval = "60s"
+debounce = "30s"
+include_drafts = false
+
+[reviewer]
+model = "gpt-6.1-sol"
+reasoning_effort = "high"
+skill = "requesting-code-review"
+
+[limits]
+max_concurrent_reviews = 2
+review_timeout = "30m"
+
+[actions]
+new_pull_request = "ignore"
+review_requested = "ask"
+head_updated = "ask"
+review_submitted = "notify"
+review_comment_added = "notify"
+publish_review = "ask"
+
+[notifications]
+desktop = true
+terminal = true
+
+[projects."shipitfi/api".actions]
+review_requested = "notify"
+head_updated = "notify"
+
+[projects."shipitfi/bill".actions]
+review_requested = "auto"
+head_updated = "auto"
+publish_review = "auto"

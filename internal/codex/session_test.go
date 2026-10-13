@@ -88,6 +88,33 @@ func testRuntimeOptions(t *testing.T) RuntimeOptions {
 	return RuntimeOptions{Executable: executable, AuthHome: home, TempRoot: t.TempDir()}
 }
 
+func TestAccountDiagnosticsRejectMissingAuthenticationWithoutStartingTurn(t *testing.T) {
+	for _, response := range []string{`{"account":{"type":"apiKey"},"requiresOpenaiAuth":true}`, `{"account":null,"requiresOpenaiAuth":true}`, `{}`} {
+		left, right := net.Pipe()
+		client := NewClient(left, left)
+		done := make(chan Message, 1)
+		go func() {
+			defer right.Close()
+			var request Message
+			_ = json.NewDecoder(right).Decode(&request)
+			done <- request
+			_ = json.NewEncoder(right).Encode(Message{ID: request.ID, Result: json.RawMessage(response)})
+		}()
+		worker := &Runtime{Client: client}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		err := worker.CheckAccount(ctx)
+		cancel()
+		_ = client.Close()
+		request := <-done
+		if request.Method != "account/read" || !strings.Contains(string(request.Params), `"refreshToken":true`) {
+			t.Fatalf("diagnostics did not use account discovery: %+v", request)
+		}
+		if (response == `{"account":{"type":"apiKey"},"requiresOpenaiAuth":true}`) != (err == nil) {
+			t.Fatalf("account evidence incorrectly classified: %s %v", response, err)
+		}
+	}
+}
+
 func TestSessionRunsPrivateSkillWithExplicitModelAndEffort(t *testing.T) {
 	t.Setenv("GH_TOKEN", "publisher-canary")
 	t.Setenv("GITHUB_TOKEN", "publisher-canary")

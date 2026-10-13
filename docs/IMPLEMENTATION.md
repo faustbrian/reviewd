@@ -8,9 +8,11 @@ Windows support was explicitly removed by the operator on 2026-10-13.
 
 ## Current delivery
 
-The first behavioral batch provides the private Codex protocol adapter and a
-sealed evidence broker. It is not the finished CLI and does not implement
-GitHub discovery, inbox persistence, publication, notifications or the TUI yet.
+The private Codex protocol adapter and sealed evidence broker are delivered.
+The current next batch adds setup, diagnostics, trusted configuration reads,
+resolution and explanation. It is not the finished application and does not
+implement GitHub discovery, inbox persistence, publication, notifications or
+the TUI yet. See [configuration and setup](CONFIGURATION.md).
 
 `internal/codex` starts a separate App Server with a private control directory,
 fresh workspace and a copied provider authentication file. It does not copy
@@ -70,5 +72,7 @@ it never copies or sends operator authentication to that fixture.
 CI installs the tested public Codex package, 0.162.1, into disposable storage
 and exercises that fixture natively on each supported OS/architecture. Use
 `python3 scripts/check.py --codex-capabilities --install-codex` to reproduce it.
-No provider account is needed for that check. Hosted results are pending until
-this workflow is pushed and actually completes.
+No provider account is needed for that check. The SDK batch at
+`8ce17e56f9d20fd397588a26fb99f757bfa40e3f` passed all four native hosted jobs in
+[run 38396971620](https://github.com/faustbrian/reviewd/actions/runs/38396971620).
+Those results do not certify later uncommitted CLI changes.

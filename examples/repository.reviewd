@@ -1,0 +1,11 @@
+# Preferences only. Jobs must load this from their trusted target-base SHA.
+schema_version = 1
+
+[reviewer]
+reasoning_effort = "high"
+
+[review]
+instructions = """
+Pay particular attention to monetary idempotency
+and compatibility with existing integrations.
+"""

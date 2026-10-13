@@ -117,6 +117,25 @@ type Model struct {
 	} `json:"supportedReasoningEfforts"`
 }
 
+// CheckAccount refreshes authentication only in this worker's owned control
+// directory. It never starts a paid turn or exposes account/email credentials.
+// Provider acceptance is still established by actual review execution.
+func (r *Runtime) CheckAccount(ctx context.Context) error {
+	var response struct {
+		Account *struct {
+			Type string `json:"type"`
+		} `json:"account"`
+		RequiresAuth *bool `json:"requiresOpenaiAuth"`
+	}
+	if err := r.Client.Call(ctx, "account/read", map[string]bool{"refreshToken": true}, &response); err != nil {
+		return err
+	}
+	if response.RequiresAuth == nil || response.Account == nil || (response.Account.Type != "apiKey" && response.Account.Type != "chatgpt") {
+		return errors.New("Codex account authentication is missing or unsupported")
+	}
+	return nil
+}
+
 func (r *Runtime) Models(ctx context.Context) ([]Model, error) {
 	var models []Model
 	cursor := ""
@@ -149,6 +168,13 @@ func (r *Runtime) validateSelection(ctx context.Context, model, effort string) e
 	if err != nil {
 		return err
 	}
+	return ValidateModelSelection(models, model, effort)
+}
+
+// ValidateModelSelection checks an advertised model/effort pair without
+// starting a review or choosing a fallback. Diagnostics use the same contract
+// as actual review execution.
+func ValidateModelSelection(models []Model, model, effort string) error {
 	for _, candidate := range models {
 		if candidate.Model != model {
 			continue
