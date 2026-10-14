@@ -1,7 +1,7 @@
 # Optional terminal inbox and navigation
 
-This interface accompanies the watcher/control workflow. The older `f73eab6`
-CI snapshots do not include it; use a snapshot from a containing source commit.
+This interface is included in the `dd4d595` macOS/Linux development snapshots.
+The older `f73eab6` snapshots do not contain the watcher/control interface.
 
 ```sh
 reviewd watch
@@ -84,7 +84,22 @@ browser or connect to GitHub.
 
 Owned native PTY journeys exercise keyboard choices, Unicode, resize,
 interrupt/dismissal, terminal modes and absence of mouse-reporting activation.
-Model checks exercise captured-payload scope and bounded layouts. These checks
-do not replace observing actual unmodified drag selection in a native terminal,
-or native Linux desktop/browser behaviour. Those remain separate acceptance
-boundaries; no live GitHub review is published by the terminal fixtures.
+Model checks exercise captured-payload scope and bounded layouts. A separate
+native macOS Terminal observation used the downloaded `dd4d595` arm64 binary:
+ordinary left-button drag with zero modifier flags selected the actual inbox
+header, verified through native selected-text state. This covers that Terminal
+configuration/header, not every emulator/view or hands-on Linux desktop/browser
+behaviour. No live GitHub review is published by these terminal fixtures.
+
+A native macOS PTY check also exercised idle attached `watch` exit by `q` and
+Ctrl-C, observed profile-lease release and operational terminal restoration,
+and confirmed that detaching a separate inbox preserved its headless watcher.
+Its seeded ask item remained pending with no decision/run. A cooldown prevented
+remote/model admission; this does not independently prove graceful joining
+while a model turn is active.
+
+The downloaded linux/arm64 binary also passed a bounded interactive check in an
+isolated arm64 Linux container: help/back, `q`, Ctrl-C and unchanged native Linux
+termios before/after exit at 74×18. This used an empty inbox and no desktop
+session, so it does not establish graphical drag selection or notification
+visibility on a Linux desktop.

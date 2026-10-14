@@ -6,8 +6,8 @@ Every decision remains available through `reviewd inbox`, `reviewd start`,
 `reviewd skip`, `reviewd show` and `reviewd publish`. Closing or dismissing a
 notification does nothing to those decisions.
 
-Notifications accompany the foreground watcher. The older `f73eab6`
-distribution snapshots do not include this later workflow.
+Notifications accompany the foreground watcher and are included in `dd4d595`
+development snapshots. Older `f73eab6` snapshots do not contain this workflow.
 
 ## Settings
 
@@ -101,5 +101,10 @@ use the terminal commands. A successful adapter exit proves dispatch, not that
 the operating system visibly displayed a banner or that the user read it.
 
 Automated owned-adapter/SQLite checks cover grouping, quiet boundaries/DST,
-deduplication, failure isolation and decision preservation. They do not prove
-visible desktop delivery on the operator's machine or every Linux desktop.
+deduplication, failure isolation and decision preservation. A separate native
+macOS arm64 check invoked the actual desktop sink once; dispatch passed and
+Notification Center exposed the uniquely titled benign message with nonzero
+accessibility geometry. This is native AX surfacing, not screenshot/pixel
+visibility, human readability, full scheduler-to-popup composition or Linux
+desktop acceptance. No settings/history were cleared. Owner-scoped dismissal
+was unavailable, so the benign test entry may remain in OS history.

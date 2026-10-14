@@ -8,6 +8,18 @@ review skill described in [setup](CONFIGURATION.md).
 The product is still being implemented. A downloadable build is not a claim
 that every specification requirement is finished, nor a formal release.
 
+## Verified development snapshot
+
+[CI run 38590705761](https://github.com/faustbrian/reviewd/actions/runs/38590705761)
+passed all four native quality and four native packaging jobs for
+`dd4d595e5c7fc176e23a0c9191771063828c8ecf`. This snapshot includes the integrated
+watcher, notifications, controls, clarification and owner recovery. All four
+downloaded archives passed checksum/source-tree/license inspection; the macOS
+arm64 download also passed local version/help/completion smoke and the bounded
+[native Terminal selection observation](ACCEPTANCE.md#native-macos-observations-at-the-delivered-revision).
+Native CI smoke is distinct from manual Linux desktop acceptance or real GitHub
+publication. No formal release was published.
+
 ## CI artifacts
 
 After all four native quality jobs pass on a push to `main`, CI builds and

@@ -109,9 +109,10 @@ capacity, debounce, checks, retry deadlines and personal holds still apply.
 Owned watcher acceptance covers a head-update burst coalescing to one final
 source/model review and an explicit same-head re-request dispatching distinct
 work without repeating it after restart. Unknown-publication reconciliation
-remains explicit through `publish`, without blindly retrying a write. Final
-platform/terminal acceptance remains outstanding. Local private-text expiry is
-wired into the watcher; see [retention](RETENTION.md). Retention itself does not
+remains explicit through `publish`, without blindly retrying a write. Native
+automated macOS/Linux checks passed for delivered `dd4d595`; bounded manual
+macOS observations and remaining platform gaps are in [acceptance](ACCEPTANCE.md).
+Local private-text expiry is wired into the watcher; see [retention](RETENTION.md). Retention itself does not
 identify or reclaim crash-left processes and storage.
 The separate [owner/resource recovery](RECOVERY.md) runs at startup and while
 waiting. It preserves live/unknown owners, closes positively identified lost

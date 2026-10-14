@@ -1,8 +1,9 @@
 # Private owner and resource recovery
 
-This addition is implemented in source after `f73eab6`; that older binary does
-not contain it. Local recovery evidence does not establish live GitHub
-publication or native Linux acceptance.
+Recovery is included in the delivered `dd4d595` development snapshots; the older
+`f73eab6` binary does not contain it. Native automated macOS/Linux checks passed;
+local recovery evidence does not establish live GitHub publication or every
+hard-crash mode. See the bounded [native owner-exit acceptance](ACCEPTANCE.md#native-macos-observations-at-the-delivered-revision).
 
 ```sh
 reviewd recover --dry-run

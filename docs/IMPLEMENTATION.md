@@ -8,31 +8,26 @@ Windows support was explicitly removed by the operator on 2026-10-13.
 
 ## Current implementation
 
-The private Codex protocol adapter, sealed evidence broker, setup, diagnostics
-and trusted configuration explanation are delivered. Manual private review
-preparation, complete immutable source/context capture, SQLite run persistence,
-exact previews and checks-only refresh without another source/model review are
-delivered at `b8a4fd46aa7165e66e5042f11bd2aebe1c5737db`. It is not the finished application:
-the initial headless watcher now adds durable decisions, bounded retries,
-CI waiting/resumption, process-safe concurrency and notification grouping/digests.
-Project pause/resume and item snooze retain durable decisions and defer scheduled
-work, automatic publication and notifications; see [personal holds](CONTROLS.md).
-Run-scoped cancellation distinguishes a durable request from confirmed worker
-exit and rejects cancellation of prepared/publication outcomes; see
-[cancellation](CANCELLATION.md). Those watcher/notification/control changes follow
-the older `f73eab6` snapshot. The optional keyboard inbox and scoped browser opening
-are now wired to the same ordinary commands; see [terminal workflows](TERMINAL.md).
-Active primary thread/turn identity, coarse activity and reported usage now
-reach the durable record before worker completion; see [sessions](SESSIONS.md).
-Durable textual clarification and owner-aware private-resource recovery are
-also wired into the application; see
-[sessions](SESSIONS.md) and [recovery](RECOVERY.md). Full native crash,
-terminal/platform and live-publication acceptance remain outstanding.
-See [foreground watching](WATCHING.md),
-[configuration and setup](CONFIGURATION.md) and
-[private reviews](REVIEWS.md). Explicit publication, duplicate references,
-readback and partial repair are implemented with owned Git/HTTP journey checks;
-see [publication and recovery](PUBLICATION.md). Live publication is unverified.
+The integrated personal workflow is delivered in the `dd4d595` development
+snapshots: setup/configuration, immutable private review preparation, explicit
+publication/reconciliation, durable discovery and scheduling, CI waiting,
+server-guided cooldowns, notifications, project/item holds, optional terminal
+controls, live primary progress, explicit clarification, cancellation, owner
+recovery and retention. It is not the finished goal: live GitHub publication
+and remaining manual platform acceptance are still unverified.
+
+All four native quality and all four native package jobs passed for that
+revision. Downloaded artifacts were verified. Separate native macOS observations
+cover actual-model owner-exit/EOF recovery, ordinary Terminal header drag and
+notification adapter dispatch/AX surfacing. Their limits are recorded in
+[acceptance tracking](ACCEPTANCE.md); none proves power-loss recovery, every
+terminal/desktop, or live GitHub publication.
+
+See [watching](WATCHING.md), [configuration](CONFIGURATION.md),
+[reviews](REVIEWS.md), [publication](PUBLICATION.md), [controls](CONTROLS.md),
+[terminal workflows](TERMINAL.md), [sessions](SESSIONS.md),
+[recovery](RECOVERY.md), [retention](RETENTION.md) and
+[distribution](DISTRIBUTION.md) for the operator contracts.
 
 `internal/codex` starts a separate App Server with a private control directory,
 fresh workspace and a copied provider authentication file. It does not copy
@@ -77,6 +72,9 @@ future host tool or another Codex version.
   separate proving boundaries. No GitHub publication test has been performed.
 
 ## Verification
+
+The historical batch results below identify their own revisions; they do not
+replace the current delivered boundary above or its acceptance limits.
 
 Run `python3 scripts/check.py` for offline tests, race detection, vet and
 CGO-free target compilation. Every bounded run creates and removes its own Go
@@ -153,8 +151,9 @@ transactional exact-target selection, bounded asynchronous protocol waits,
 separate local/write/clear facts, generic notifications and an optional terminal
 editor. The actual selected model asked and consumed an independently supplied
 fixture answer through the default private CLI. These later changes are absent
-from the older `f73eab6` snapshot. Native Linux/desktop UX, actual-model hard-crash
-recovery and live GitHub publication acceptance remain outstanding.
+from the older `f73eab6` snapshot. Hands-on Linux desktop UX, arbitrary hard-crash
+modes and live GitHub publication remain outside that fixture. The later bounded native observations
+are recorded in [acceptance tracking](ACCEPTANCE.md).
 Native macOS PTY checks now cover answering, dismissal, interruption, stale
 prompts and terminal restoration without mouse reporting.
 

@@ -2,20 +2,21 @@
 
 A personal, local-first GitHub review inbox backed by Codex.
 
-Implementation is in progress. The complete user-authorized scope is recorded
-in [the specification](docs/SPECIFICATION.md). The initial private Codex adapter
-is implemented. Setup, diagnostics, configuration explanation and private
-review preparation with a durable local run inbox and explicit publication
-with reconciliation are available. The initial headless watcher and durable
-start/skip decisions, grouped notifications, personal holds, optional terminal
-attachment and owner/resource recovery are implemented in source. Native platform
-UX and live GitHub publication acceptance remain incomplete. CI snapshots are
-commit-specific; the older `f73eab6` artifacts exclude these later features.
+Implementation is in progress. The [specification](docs/SPECIFICATION.md)
+records the complete scope. Setup, configuration explanation, private reviews,
+explicit publication/reconciliation, the headless watcher, durable decisions,
+grouped notifications, personal holds, the optional terminal inbox and private
+owner/resource recovery are integrated. The `dd4d595` CI snapshots include these
+workflows on macOS and Linux, amd64 and arm64. Live GitHub publication and
+remaining platform acceptance are not yet complete.
 
 See [implementation boundaries](docs/IMPLEMENTATION.md) for the current scope
 and [acceptance tracking](docs/ACCEPTANCE.md) for outstanding product work.
 
 ## Current CLI
+
+See the [complete command reference](docs/COMMANDS.md) for every command,
+shared option and decision boundary.
 
 Download a [checksummed macOS/Linux CI snapshot](docs/DISTRIBUTION.md), or build
 `cmd/reviewd` using a disposable Go cache, then see
