@@ -7,8 +7,9 @@ records the complete scope. Setup, configuration explanation, private reviews,
 explicit publication/reconciliation, the headless watcher, durable decisions,
 grouped notifications, personal holds, the optional terminal inbox and private
 owner/resource recovery are integrated. The `dd4d595` CI snapshots include these
-workflows on macOS and Linux, amd64 and arm64. Live GitHub publication and
-remaining platform acceptance are not yet complete.
+workflows on macOS and Linux, amd64 and arm64. Live GitHub publication
+acceptance is not yet complete; native observations cover only their documented
+tested environments.
 
 See [implementation boundaries](docs/IMPLEMENTATION.md) for the current scope
 and [acceptance tracking](docs/ACCEPTANCE.md) for outstanding product work.

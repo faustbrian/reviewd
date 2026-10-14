@@ -14,12 +14,14 @@ publication/reconciliation, durable discovery and scheduling, CI waiting,
 server-guided cooldowns, notifications, project/item holds, optional terminal
 controls, live primary progress, explicit clarification, cancellation, owner
 recovery and retention. It is not the finished goal: live GitHub publication
-and remaining manual platform acceptance are still unverified.
+is still unverified; native observations cover only their documented tested
+environments.
 
 All four native quality and all four native package jobs passed for that
 revision. Downloaded artifacts were verified. Separate native macOS observations
 cover actual-model owner-exit/EOF recovery, ordinary Terminal header drag and
-notification adapter dispatch/AX surfacing. Their limits are recorded in
+notification adapter dispatch/AX surfacing. Linux observations also cover the
+actual terminal artifact and private xterm/Dunst components. Their limits are in
 [acceptance tracking](ACCEPTANCE.md); none proves power-loss recovery, every
 terminal/desktop, or live GitHub publication.
 

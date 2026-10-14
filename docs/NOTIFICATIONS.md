@@ -108,3 +108,10 @@ accessibility geometry. This is native AX surfacing, not screenshot/pixel
 visibility, human readability, full scheduler-to-popup composition or Linux
 desktop acceptance. No settings/history were cleared. Owner-scoped dismissal
 was unavailable, so the benign test entry may remain in OS history.
+
+A separate arm64 Linux fixture used the actual desktop sink, `notify-send` and
+Dunst in a new private desktop/bus session. Its uniquely titled benign notice
+and complete body were visible in an inspected screenshot; the owned notice
+was then closed. This verifies that tested Linux adapter/display composition,
+not every desktop daemon, permissions policy or user profile. It never accessed
+the user's desktop/clipboard or granted an inbox decision.

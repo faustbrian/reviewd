@@ -103,3 +103,11 @@ isolated arm64 Linux container: help/back, `q`, Ctrl-C and unchanged native Linu
 termios before/after exit at 74×18. This used an empty inbox and no desktop
 session, so it does not establish graphical drag selection or notification
 visibility on a Linux desktop.
+
+A separate private Linux Xvfb/xterm observation selected the actual header by
+ordinary unmodified drag and inspected the resized 620×350 empty inbox. A
+combined helper's direct-window `q` injection failed; a subsequent same-terminal
+probe distinguished missing fixture input delivery from application handling.
+With verified focus, the actual inbox accepted `q`, exited 0 and restored
+identical terminal settings. The original helper remains failed; these bounded
+components do not certify every emulator or a populated review workflow.
