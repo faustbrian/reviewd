@@ -24,3 +24,44 @@ jobs:
           cache: false
       - name: Tests, race detection, vet and target builds
         run: python scripts/check.py --codex-capabilities --install-codex
+
+  packages:
+    name: Package (${{ matrix.target }})
+    needs: quality
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: linux/amd64
+            artifact: linux-amd64
+          - os: ubuntu-24.04-arm
+            target: linux/arm64
+            artifact: linux-arm64
+          - os: macos-15
+            target: darwin/arm64
+            artifact: darwin-arm64
+          - os: macos-15-intel
+            target: darwin/amd64
+            artifact: darwin-amd64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Packaging behavior
+        run: python3 -B -m unittest discover -s scripts -p test_package.py -v
+      - name: Build immutable commit and smoke native binary
+        env:
+          PACKAGE_TARGET: ${{ matrix.target }}
+        run: python3 scripts/package.py --target "$PACKAGE_TARGET" --output dist --smoke
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reviewd-${{ matrix.artifact }}-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
