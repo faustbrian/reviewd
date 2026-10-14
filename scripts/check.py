@@ -30,9 +30,13 @@ def main():
     if args.live_codex:
         commands.append(["go", "test", "./internal/codex", "-run",
                          "TestLiveCodex", "-count=1", "-v"])
+        commands.append(["go", "test", "./internal/cli", "-run",
+                         "TestLiveCodexClarification", "-count=1", "-v"])
     if args.codex_capabilities:
         commands.append(["go", "test", "./internal/codex", "-run",
                          "TestCodexCapabilityBoundary", "-count=1", "-v"])
+        commands.append(["go", "test", "./internal/cli", "-run",
+                         "TestCodexCapabilityClarification", "-count=1", "-v"])
     results = []
     with tempfile.TemporaryDirectory(prefix="reviewd-check-") as directory:
         env = os.environ.copy()
@@ -52,11 +56,11 @@ def main():
             env["PATH"] = str(Path(directory)/"codex"/"node_modules"/".bin")+os.pathsep+env["PATH"]
         for command in commands:
             current = env.copy()
-            if "TestLiveCodex" in command:
+            if any(part.startswith("TestLiveCodex") for part in command):
                 current["REVIEWD_LIVE_CODEX"] = "1"
             else:
                 current.pop("REVIEWD_LIVE_CODEX", None)
-            if "TestCodexCapabilityBoundary" in command:
+            if any(part.startswith("TestCodexCapability") for part in command):
                 current["REVIEWD_CODEX_CAPABILITIES"] = "1"
             else:
                 current.pop("REVIEWD_CODEX_CAPABILITIES", None)

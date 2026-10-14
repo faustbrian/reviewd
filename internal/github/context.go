@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type ReviewContext struct {
@@ -147,6 +149,9 @@ func (c *Client) Context(ctx context.Context, pull Pull) (ReviewContext, error) 
 		return ReviewContext{}, errors.New("review context requires captured pull-request identity")
 	}
 	result := ReviewContext{Reviews: []json.RawMessage{}, Comments: []json.RawMessage{}, Conversation: []json.RawMessage{}, Timeline: []json.RawMessage{}, Threads: []ReviewThread{}, Requirements: []json.RawMessage{}, Gaps: []string{}}
+	// Server retry guidance is a scheduling constraint, not a readiness gap.
+	// Stop acquisition and preserve its typed error instead of continuing to
+	// request more context or discarding its deadline in presentation text.
 	number := strconv.Itoa(pull.Number)
 	for _, input := range []struct {
 		name, path string
@@ -154,8 +159,8 @@ func (c *Client) Context(ctx context.Context, pull Pull) (ReviewContext, error) 
 	}{{"reviews", prefix + "/pulls/" + number + "/reviews", &result.Reviews}, {"inline comments", prefix + "/pulls/" + number + "/comments", &result.Comments}, {"conversation", prefix + "/issues/" + number + "/comments", &result.Conversation}, {"request timeline", prefix + "/issues/" + number + "/timeline", &result.Timeline}} {
 		items, readErr := c.rawPages(ctx, input.path)
 		if readErr != nil {
-			if ctx.Err() != nil {
-				return ReviewContext{}, ctx.Err()
+			if fatal := readInterruption(ctx, readErr); fatal != nil {
+				return ReviewContext{}, fatal
 			}
 			result.Gaps = append(result.Gaps, "Complete "+input.name+" could not be acquired: "+readErr.Error())
 			continue
@@ -166,8 +171,8 @@ func (c *Client) Context(ctx context.Context, pull Pull) (ReviewContext, error) 
 	variables := map[string]any{"owner": parts[1], "name": parts[2], "number": pull.Number, "after": nil}
 	threads, readErr := c.readThreads(ctx, pull, variables)
 	if readErr != nil {
-		if ctx.Err() != nil {
-			return ReviewContext{}, ctx.Err()
+		if fatal := readInterruption(ctx, readErr); fatal != nil {
+			return ReviewContext{}, fatal
 		}
 		result.Gaps = append(result.Gaps, "Complete review-thread state could not be acquired: "+readErr.Error())
 	} else {
@@ -176,8 +181,8 @@ func (c *Client) Context(ctx context.Context, pull Pull) (ReviewContext, error) 
 	variables["after"] = nil
 	requirements, readErr := c.readRequirements(ctx, pull, variables)
 	if readErr != nil {
-		if ctx.Err() != nil {
-			return ReviewContext{}, ctx.Err()
+		if fatal := readInterruption(ctx, readErr); fatal != nil {
+			return ReviewContext{}, fatal
 		}
 		result.Gaps = append(result.Gaps, "Linked closing requirements could not be acquired: "+readErr.Error())
 	} else {
@@ -209,8 +214,20 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 		Data   json.RawMessage   `json:"data"`
 		Errors []json.RawMessage `json:"errors"`
 	}
-	if err := c.readRequest(ctx, "POST", endpoint.String(), data, &response); err != nil {
+	var headers http.Header
+	if err := c.readRequestWithHeaders(ctx, "POST", endpoint.String(), data, &response, &headers); err != nil {
 		return err
+	}
+	if len(response.Errors) > 0 {
+		limited := headers.Get("X-RateLimit-Remaining") == "0" || headers.Get("Retry-After") != "" || rateLimitErrors(response.Errors)
+		if limited {
+			// GraphQL's application-level rate limit is transported with HTTP
+			// 200. Reuse the deadline parser and fallback while retaining that
+			// actual transport status in the typed error.
+			err := remoteHTTPError(&http.Response{StatusCode: http.StatusTooManyRequests, Header: headers}, time.Now())
+			err.Status = http.StatusOK
+			return err
+		}
 	}
 	if len(response.Errors) > 0 || len(response.Data) == 0 || string(response.Data) == "null" || json.Unmarshal(response.Data, target) != nil {
 		return errors.New("GitHub GraphQL read was incomplete or denied")

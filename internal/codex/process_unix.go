@@ -5,28 +5,39 @@ package codex
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os/exec"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
+
+	"github.com/faustbrian/reviewd/internal/lifetime"
 )
 
 func configureProcess(command *exec.Cmd) {
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	// The supervisor owns group termination, including descendants after the
-	// original process exits. CommandContext only wakes that supervisor.
-	command.Cancel = func() error { return nil }
+	lifetime.Configure(command)
 }
 
 // superviseProcess owns the one group created by Setpgid. Cleanup begins at
 // parent exit, not a later Close, so a completed runtime cannot retain children.
-func superviseProcess(command *exec.Cmd, parent <-chan error, stop <-chan struct{}) error {
-	parentExited := false
+func superviseProcess(command *exec.Cmd, parent <-chan error, stop <-chan struct{}) (result error) {
+	// No competing Cmd.Wait may release the leader PID while group signals
+	// remain possible. Reap only after this supervisor's final signal.
+	exited := parent
+	defer func() {
+		if result != nil {
+			// Inspection failure must not leave a known-owned live server
+			// running merely because its private storage will be retained.
+			result = errors.Join(result, signalProcessGroup(command.Process.Pid, syscall.SIGKILL))
+		}
+		// Exit status is not a protocol outcome: normal interruption kills the
+		// server. Only an inability to reap must prevent isolation cleanup.
+		_, err := lifetime.Reap(command, exited)
+		result = errors.Join(result, err)
+	}()
 	select {
-	case <-parent:
-		parentExited = true
+	case err := <-parent:
+		observed := make(chan error, 1)
+		observed <- err
+		exited = observed
 	case <-stop:
 	}
 	alive, err := processGroupAlive(command.Process.Pid)
@@ -49,33 +60,11 @@ func superviseProcess(command *exec.Cmd, parent <-chan error, stop <-chan struct
 			}
 		}
 	}
-	if !parentExited {
-		select {
-		case <-parent:
-		case <-time.After(time.Second):
-			return errors.New("Codex parent was not reaped after group termination")
-		}
-	}
 	return nil
 }
 
 func signalProcessGroup(group int, signal syscall.Signal) error {
-	err := syscall.Kill(-group, signal)
-	if err == nil || errors.Is(err, syscall.ESRCH) {
-		return nil
-	}
-	if errors.Is(err, syscall.EPERM) {
-		// Darwin may return EPERM after the last eligible member exits. The
-		// earlier metadata scan cannot certify the state at this signal.
-		alive, inspectErr := processGroupAlive(group)
-		if inspectErr != nil {
-			return errors.Join(err, inspectErr)
-		}
-		if !alive {
-			return nil
-		}
-	}
-	return err
+	return lifetime.SignalGroup(group, signal)
 }
 
 func waitProcessGroup(group int, timeout time.Duration) error {
@@ -98,16 +87,5 @@ func processGroupAlive(group int) (bool, error) {
 	// execute or retain credentials and may await an unrelated init's reaper.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, "ps", "-axo", "pgid=,stat=").Output()
-	if err != nil {
-		return false, fmt.Errorf("inspect owned Codex process group: %w", err)
-	}
-	expected := strconv.Itoa(group)
-	for _, line := range strings.Split(string(output), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 2 && fields[0] == expected && !strings.HasPrefix(fields[1], "Z") {
-			return true, nil
-		}
-	}
-	return false, nil
+	return lifetime.GroupAlive(ctx, group)
 }

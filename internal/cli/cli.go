@@ -19,6 +19,7 @@ import (
 	"github.com/faustbrian/reviewd/internal/codex"
 	"github.com/faustbrian/reviewd/internal/config"
 	"github.com/faustbrian/reviewd/internal/github"
+	"github.com/faustbrian/reviewd/internal/notify"
 	"github.com/faustbrian/reviewd/internal/review"
 	"github.com/faustbrian/reviewd/internal/source"
 	"github.com/spf13/cobra"
@@ -33,10 +34,13 @@ type Diagnostic struct {
 }
 type Dependencies struct {
 	Version string
+	Input   io.Reader
+	Desktop notify.Sink
 	GitHub  func(context.Context, string) (*github.Client, error)
 	Codex   func(context.Context, []config.Snapshot) []Diagnostic
 	Review  func(context.Context, review.WorkerRequest) (codex.ReviewOutput, error)
 	Source  func(context.Context, github.Pull) (*source.Snapshot, error)
+	OpenURL func(context.Context, string) error
 }
 type commandError struct {
 	code    int
@@ -117,6 +121,9 @@ func Run(ctx context.Context, args []string, output, diagnostics io.Writer, deps
 	}
 	options := &execution{profile: "default"}
 	root := &cobra.Command{Use: "reviewd", Short: "A personal GitHub review inbox", Version: deps.Version, SilenceErrors: true, SilenceUsage: true}
+	if deps.Input != nil {
+		root.SetIn(deps.Input)
+	}
 	root.SetOut(output)
 	root.SetErr(diagnostics)
 	root.SetArgs(args)
@@ -209,7 +216,10 @@ func Run(ctx context.Context, args []string, output, diagnostics io.Writer, deps
 	configure.AddCommand(explain)
 	root.AddCommand(configure)
 	root.AddCommand(options.doctorCommand(deps), options.initCommand(deps))
-	root.AddCommand(options.reviewCommand(deps), options.refreshCommand(deps), options.publishCommand(deps), options.showCommand(), options.inboxCommand(), options.syncCommand(deps), options.followCommand(true), options.followCommand(false))
+	root.AddCommand(options.reviewCommand(deps), options.refreshCommand(deps), options.publishCommand(deps), options.showCommand(), options.inboxCommand(deps), options.syncCommand(deps), options.followCommand(true), options.followCommand(false), options.watchCommand(deps))
+	root.AddCommand(options.decisionCommand(true), options.decisionCommand(false), options.projectPauseCommand(true), options.projectPauseCommand(false), options.snoozeCommand(), options.unsnoozeCommand())
+	root.AddCommand(options.cancelCommand(), options.openCommand(deps), options.inputsCommand(), options.answerCommand())
+	root.AddCommand(options.cleanupCommand(), options.recoveryCommand())
 	completion := &cobra.Command{Use: "completion <bash|zsh|fish>", Short: "Print shell completion without installing it", Args: cobra.ExactArgs(1)}
 	completion.RunE = func(command *cobra.Command, args []string) error {
 		switch args[0] {

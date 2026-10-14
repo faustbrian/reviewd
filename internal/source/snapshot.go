@@ -18,9 +18,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
-	"time"
 	"unicode/utf8"
+
+	"github.com/faustbrian/reviewd/internal/lifetime"
 )
 
 const (
@@ -119,21 +119,9 @@ func (r runner) run(ctx context.Context, input []byte, limit int, args ...string
 	output := &boundedBuffer{limit: limit}
 	command.Stdout = output
 	command.Stderr = io.Discard
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	command.Cancel = func() error {
-		if command.Process == nil {
-			return os.ErrProcessDone
-		}
-		err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return os.ErrProcessDone
-		}
-		return err
-	}
-	command.WaitDelay = 5 * time.Second
-	err := command.Run()
-	if command.Process != nil {
-		_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+	err := lifetime.Run(ctx, command)
+	if errors.Is(err, lifetime.ErrCleanupUncertain) {
+		return nil, err
 	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -154,14 +142,14 @@ func Acquire(ctx context.Context, options Options, boundary Boundary) (snapshot 
 	if !objectID.MatchString(boundary.TargetBaseSHA) || !objectID.MatchString(boundary.HeadSHA) || boundary.Number < 1 || boundary.ChangedFiles < 0 {
 		return nil, errors.New("source acquisition requires an immutable target base, head and complete changed-file count")
 	}
-	root, err := os.MkdirTemp(options.TempRoot, "reviewd-source-")
+	root, err := os.MkdirTemp(lifetime.Root(ctx, options.TempRoot), "reviewd-source-")
 	if err != nil {
 		return nil, errors.New("could not create owned source storage")
 	}
 	snapshot = &Snapshot{TargetBaseSHA: boundary.TargetBaseSHA, HeadSHA: boundary.HeadSHA, root: root, Sources: map[string]map[string]string{}, Manifests: map[string][]Entry{}}
 	owned := snapshot
 	defer func() {
-		if err != nil {
+		if err != nil && !errors.Is(err, lifetime.ErrCleanupUncertain) {
 			err = errors.Join(err, owned.Close())
 		}
 	}()

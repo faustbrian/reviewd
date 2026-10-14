@@ -76,8 +76,8 @@ func (c *Client) Checks(ctx context.Context, pull Pull) (CheckReport, error) {
 	}
 	rawRules, err := c.rawPages(ctx, prefix+"/rules/branches/"+url.PathEscape(pull.BaseRef))
 	if err != nil {
-		if ctx.Err() != nil {
-			return CheckReport{}, ctx.Err()
+		if fatal := readInterruption(ctx, err); fatal != nil {
+			return CheckReport{}, fatal
 		}
 		return unavailableChecks(pull.HeadSHA, "Complete active branch rules could not be resolved; check repository permissions, pagination and GitHub rules API support."), nil
 	}
@@ -122,8 +122,8 @@ func (c *Client) Checks(ctx context.Context, pull Pull) (CheckReport, error) {
 		Protected *bool `json:"protected"`
 	}
 	if err := c.get(ctx, prefix+"/branches/"+url.PathEscape(pull.BaseRef), &branch); err != nil {
-		if ctx.Err() != nil {
-			return CheckReport{}, ctx.Err()
+		if fatal := readInterruption(ctx, err); fatal != nil {
+			return CheckReport{}, fatal
 		}
 		return unavailableChecks(pull.HeadSHA, "Target branch protection could not be resolved."), nil
 	}
@@ -140,8 +140,8 @@ func (c *Client) Checks(ctx context.Context, pull Pull) (CheckReport, error) {
 			} `json:"checks"`
 		}
 		if err := c.get(ctx, prefix+"/branches/"+url.PathEscape(pull.BaseRef)+"/protection/required_status_checks", &classic); err != nil {
-			if ctx.Err() != nil {
-				return CheckReport{}, ctx.Err()
+			if fatal := readInterruption(ctx, err); fatal != nil {
+				return CheckReport{}, fatal
 			}
 			return unavailableChecks(pull.HeadSHA, "Classic required-check protection is inaccessible; a 404 is not proof that a protected branch has no additional mandatory checks."), nil
 		}
@@ -178,8 +178,8 @@ func (c *Client) Checks(ctx context.Context, pull Pull) (CheckReport, error) {
 	report := CheckReport{HeadSHA: pull.HeadSHA, Ready: true, RulesDigest: hex.EncodeToString(digest[:]), Checks: []MandatoryCheck{}}
 	runs, statuses, err := c.checkEvidence(ctx, prefix, pull.HeadSHA)
 	if err != nil {
-		if ctx.Err() != nil {
-			return CheckReport{}, ctx.Err()
+		if fatal := readInterruption(ctx, err); fatal != nil {
+			return CheckReport{}, fatal
 		}
 		report.Ready = false
 		report.Checks = append([]MandatoryCheck{}, required...)

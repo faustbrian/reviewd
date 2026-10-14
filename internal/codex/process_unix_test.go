@@ -4,6 +4,7 @@ package codex
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/faustbrian/reviewd/internal/lifetime"
 )
 
 func TestCloseStopsDescendantAfterParentExit(t *testing.T) {
@@ -27,7 +30,7 @@ func TestCloseStopsDescendantAfterParentExit(t *testing.T) {
 			if err := command.Start(); err != nil {
 				t.Fatal(err)
 			}
-			if err := command.Wait(); err != nil {
+			if err := lifetime.WaitExited(command.Process.Pid); err != nil {
 				t.Fatal(err)
 			}
 			data, err := os.ReadFile(pidFile)
@@ -38,12 +41,10 @@ func TestCloseStopsDescendantAfterParentExit(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
 			// Give the child time to install its inherited TERM policy.
 			time.Sleep(50 * time.Millisecond)
 			r := &Runtime{command: command, wait: make(chan error, 1), stop: make(chan struct{})}
-			parent := make(chan error, 1)
-			parent <- nil
+			parent := lifetime.Observe(command)
 			go func() { r.wait <- superviseProcess(command, parent, r.stop) }()
 			if err := r.Close(); err != nil {
 				t.Fatal(err)
@@ -51,11 +52,14 @@ func TestCloseStopsDescendantAfterParentExit(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			for {
+				if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+					return
+				}
 				output, err := exec.CommandContext(ctx, "ps", "-p", strconv.Itoa(pid), "-o", "stat=").Output()
 				if ctx.Err() != nil {
 					t.Fatalf("Close returned with live owned child %d", pid)
 				}
-				if err != nil || strings.HasPrefix(strings.TrimSpace(string(output)), "Z") {
+				if err == nil && strings.HasPrefix(strings.TrimSpace(string(output)), "Z") {
 					return
 				}
 				if ctx.Err() != nil {

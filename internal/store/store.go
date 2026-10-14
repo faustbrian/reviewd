@@ -35,33 +35,44 @@ const (
 )
 
 type Run struct {
-	ID             string          `json:"id"`
-	Repository     string          `json:"repository"`
-	RepositoryID   int64           `json:"repository_id"`
-	PullID         int64           `json:"pull_id"`
-	Number         int             `json:"number"`
-	ActorID        int64           `json:"actor_id"`
-	ActorLogin     string          `json:"actor_login"`
-	WorkKey        string          `json:"work_key"`
-	State          State           `json:"state"`
-	Private        bool            `json:"private"`
-	Configuration  json.RawMessage `json:"configuration"`
-	Context        json.RawMessage `json:"context,omitempty"`
-	SkillDigest    string          `json:"skill_digest,omitempty"`
-	CreatedAt      time.Time       `json:"created_at"`
-	UpdatedAt      time.Time       `json:"updated_at"`
-	ThreadID       string          `json:"thread_id,omitempty"`
-	TurnID         string          `json:"turn_id,omitempty"`
-	PayloadID      string          `json:"payload_id,omitempty"`
-	Prepared       json.RawMessage `json:"prepared,omitempty"`
-	Outcome        json.RawMessage `json:"outcome,omitempty"`
-	Failure        string          `json:"failure,omitempty"`
-	RequestedModel string          `json:"requested_model,omitempty"`
-	EffectiveModel string          `json:"effective_model,omitempty"`
-	Usage          json.RawMessage `json:"usage,omitempty"`
-	Specialists    json.RawMessage `json:"specialists,omitempty"`
+	OwnerID               string          `json:"owner_id,omitempty"`
+	OwnerClosed           bool            `json:"owner_closed,omitempty"`
+	Archive               *Archive        `json:"archive,omitempty"`
+	Inputs                []Input         `json:"inputs,omitempty"`
+	ID                    string          `json:"id"`
+	InboxItemID           string          `json:"inbox_item_id,omitempty"`
+	CancellationRequested bool            `json:"cancellation_requested,omitempty"`
+	Superseded            bool            `json:"superseded,omitempty"`
+	Repository            string          `json:"repository"`
+	RepositoryID          int64           `json:"repository_id"`
+	PullID                int64           `json:"pull_id"`
+	Number                int             `json:"number"`
+	ActorID               int64           `json:"actor_id"`
+	ActorLogin            string          `json:"actor_login"`
+	WorkKey               string          `json:"work_key"`
+	State                 State           `json:"state"`
+	Private               bool            `json:"private"`
+	Configuration         json.RawMessage `json:"configuration"`
+	Context               json.RawMessage `json:"context,omitempty"`
+	SkillDigest           string          `json:"skill_digest,omitempty"`
+	CreatedAt             time.Time       `json:"created_at"`
+	UpdatedAt             time.Time       `json:"updated_at"`
+	ThreadID              string          `json:"thread_id,omitempty"`
+	TurnID                string          `json:"turn_id,omitempty"`
+	PayloadID             string          `json:"payload_id,omitempty"`
+	Prepared              json.RawMessage `json:"prepared,omitempty"`
+	Outcome               json.RawMessage `json:"outcome,omitempty"`
+	Failure               string          `json:"failure,omitempty"`
+	RequestedModel        string          `json:"requested_model,omitempty"`
+	EffectiveModel        string          `json:"effective_model,omitempty"`
+	Usage                 json.RawMessage `json:"usage,omitempty"`
+	Specialists           json.RawMessage `json:"specialists,omitempty"`
+	Progress              string          `json:"progress,omitempty"`
 }
-type Store struct{ db *sql.DB }
+type Store struct {
+	db        *sql.DB
+	directory string
+}
 
 func Open(ctx context.Context, directory string) (store *Store, err error) {
 	directory, err = filepath.Abs(directory)
@@ -100,54 +111,14 @@ func Open(ctx context.Context, directory string) (store *Store, err error) {
 		return nil, errors.New("cannot open local state database")
 	}
 	db.SetMaxOpenConns(1)
-	store = &Store{db: db}
+	store = &Store{db: db, directory: directory}
 	defer func() {
 		if err != nil {
 			_ = db.Close()
 		}
 	}()
-	var version int
-	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
-		return nil, errors.New("cannot read state database schema")
-	}
-	if version > 2 {
-		return nil, errors.New("state database uses a newer schema; upgrade reviewd without replacing the database")
-	}
-	if version == 0 {
-		tx, beginErr := db.BeginTx(ctx, nil)
-		if beginErr != nil {
-			return nil, errors.New("cannot initialize state schema")
-		}
-		defer tx.Rollback()
-		_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS runs (
- id TEXT PRIMARY KEY, repository TEXT NOT NULL, repository_id INTEGER NOT NULL,
- pull_id INTEGER NOT NULL, actor_id INTEGER NOT NULL, work_key TEXT NOT NULL,
- state TEXT NOT NULL CHECK(state IN ('queued','waiting_checks','reviewing','prepared','publishing','published','publication_unknown','partial','failed','cancelled','stale')),
- record TEXT NOT NULL CHECK(json_valid(record)), updated_at TEXT NOT NULL,
- prepared TEXT CHECK(prepared IS NULL OR json_valid(prepared)), payload_id TEXT,
- thread_id TEXT, turn_id TEXT, outcome TEXT CHECK(outcome IS NULL OR json_valid(outcome)), failure TEXT,
- UNIQUE(repository,repository_id,pull_id,actor_id,work_key)
-);
-CREATE TABLE IF NOT EXISTS publication_decisions (
- run_id TEXT NOT NULL REFERENCES runs(id), payload_id TEXT NOT NULL,
- decided_at TEXT NOT NULL, PRIMARY KEY(run_id,payload_id)
-);
-CREATE TABLE IF NOT EXISTS publication_attempts (
- id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), payload_id TEXT NOT NULL,
- started_at TEXT NOT NULL
-);
-PRAGMA user_version=1;`)
-		if err != nil {
-			return nil, errors.New("cannot create state schema")
-		}
-		if err = tx.Commit(); err != nil {
-			return nil, errors.New("cannot commit state schema")
-		}
-	}
-	if version < 2 {
-		if err = store.migrateDiscovery(ctx); err != nil {
-			return nil, err
-		}
+	if err = migrate(ctx, db); err != nil {
+		return nil, err
 	}
 	return store, nil
 }
@@ -183,6 +154,16 @@ func newID() (string, error) {
 func timestamp() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 
 func (s *Store) Create(ctx context.Context, run Run) (Run, bool, error) {
+	return s.create(ctx, run, nil)
+}
+
+// CreateForItem atomically binds a run to the currently authorized inbox event.
+// Neither a stale decision nor a superseded snapshot can start new work.
+func (s *Store) CreateForItem(ctx context.Context, run Run, item InboxItem) (Run, bool, error) {
+	return s.create(ctx, run, &item)
+}
+
+func (s *Store) create(ctx context.Context, run Run, item *InboxItem) (Run, bool, error) {
 	if run.Repository == "" || run.RepositoryID <= 0 || run.PullID <= 0 || run.Number < 1 || run.ActorID <= 0 || run.ActorLogin == "" || run.WorkKey == "" || run.State != Queued || !json.Valid(run.Configuration) || (len(run.Context) > 0 && !json.Valid(run.Context)) {
 		return Run{}, false, errors.New("run requires complete scope, frozen policy and queued state")
 	}
@@ -193,11 +174,38 @@ func (s *Store) Create(ctx context.Context, run Run) (Run, bool, error) {
 	}
 	run.CreatedAt = time.Now().UTC()
 	run.UpdatedAt = run.CreatedAt
+	run.InboxItemID = ""
+	if item != nil {
+		run.InboxItemID = item.ID
+	}
 	data, err := json.Marshal(run)
 	if err != nil {
 		return Run{}, false, err
 	}
-	result, err := s.db.ExecContext(ctx, `INSERT INTO runs(id,repository,repository_id,pull_id,actor_id,work_key,state,record,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(repository,repository_id,pull_id,actor_id,work_key) DO NOTHING`, run.ID, run.Repository, run.RepositoryID, run.PullID, run.ActorID, run.WorkKey, run.State, string(data), run.UpdatedAt.Format(time.RFC3339Nano))
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Run{}, false, err
+	}
+	defer tx.Rollback()
+	var current InboxItem
+	if item != nil {
+		if hold, err := held(ctx, tx, *item, run.CreatedAt); err != nil {
+			return Run{}, false, err
+		} else if hold {
+			return Run{}, false, ErrHeld
+		}
+		var raw string
+		err := tx.QueryRowContext(ctx, `SELECT i.record FROM inbox_items i JOIN discovery_scopes d ON d.repository=i.repository AND d.actor_id=i.actor_id
+ WHERE i.id=? AND json_extract(d.record,'$.state')='ok' AND json_extract(d.record,'$.repository_id')=?`, item.ID, run.RepositoryID).Scan(&raw)
+		if err != nil || json.Unmarshal([]byte(raw), &current) != nil {
+			return Run{}, false, errors.New("current review item is unavailable")
+		}
+		ready := current.State == "queued" || (current.State == "retry_wait" && current.Attempts > 0 && current.Attempts < 3 && !current.RetryAt.IsZero() && !run.CreatedAt.Before(current.RetryAt))
+		if current.Repository != run.Repository || current.ActorID != run.ActorID || current.PullID != run.PullID || current.EventKey != item.EventKey || current.DecisionID != item.DecisionID || current.HeadSHA != item.HeadSHA || current.TargetBaseSHA != item.TargetBaseSHA || current.ContextKey != item.ContextKey || !ready {
+			return Run{}, false, errors.New("review item eligibility or decision changed; synchronize and choose its current event")
+		}
+	}
+	result, err := tx.ExecContext(ctx, `INSERT INTO runs(id,repository,repository_id,pull_id,actor_id,work_key,state,record,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(repository,repository_id,pull_id,actor_id,work_key) DO NOTHING`, run.ID, run.Repository, run.RepositoryID, run.PullID, run.ActorID, run.WorkKey, run.State, string(data), run.UpdatedAt.Format(time.RFC3339Nano))
 	if err != nil {
 		return Run{}, false, errors.New("could not persist queued review")
 	}
@@ -206,25 +214,40 @@ func (s *Store) Create(ctx context.Context, run Run) (Run, bool, error) {
 		return Run{}, false, err
 	}
 	if count == 1 {
+		if item != nil {
+			current.RunID = run.ID
+			current.State = "reviewing"
+			current.UpdatedAt = run.UpdatedAt
+			raw, _ := json.Marshal(current)
+			if _, err := tx.ExecContext(ctx, "UPDATE inbox_items SET record=? WHERE id=?", string(raw), current.ID); err != nil {
+				return Run{}, false, err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return Run{}, false, err
+		}
 		return run, true, nil
 	}
 	var existing string
-	err = s.db.QueryRowContext(ctx, "SELECT id FROM runs WHERE repository=? AND repository_id=? AND pull_id=? AND actor_id=? AND work_key=?", run.Repository, run.RepositoryID, run.PullID, run.ActorID, run.WorkKey).Scan(&existing)
+	err = tx.QueryRowContext(ctx, "SELECT id FROM runs WHERE repository=? AND repository_id=? AND pull_id=? AND actor_id=? AND work_key=?", run.Repository, run.RepositoryID, run.PullID, run.ActorID, run.WorkKey).Scan(&existing)
 	if err != nil {
 		return Run{}, false, errors.New("could not reconcile existing review work")
 	}
-	run, err = s.Get(ctx, existing)
+	run, err = readRun(tx.QueryRowContext(ctx, selectRun+" WHERE id=?", existing))
+	if err == nil {
+		err = tx.Commit()
+	}
 	return run, false, err
 }
 
-const selectRun = `SELECT record,state,updated_at,prepared,payload_id,thread_id,turn_id,outcome,failure FROM runs`
+const selectRun = `SELECT record,state,updated_at,prepared,payload_id,thread_id,turn_id,outcome,failure,` + inputAggregate + ` FROM runs`
 
 type rowScanner interface{ Scan(...any) error }
 
 func readRun(row rowScanner) (Run, error) {
-	var data, state, updated string
+	var data, state, updated, inputs string
 	var prepared, payload, thread, turn, outcome, failure sql.NullString
-	if err := row.Scan(&data, &state, &updated, &prepared, &payload, &thread, &turn, &outcome, &failure); err != nil {
+	if err := row.Scan(&data, &state, &updated, &prepared, &payload, &thread, &turn, &outcome, &failure, &inputs); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Run{}, errors.New("review run was not found in the selected profile")
 		}
@@ -233,6 +256,9 @@ func readRun(row rowScanner) (Run, error) {
 	var run Run
 	if json.Unmarshal([]byte(data), &run) != nil {
 		return Run{}, errors.New("durable review record is invalid; preserve the database for recovery")
+	}
+	if json.Unmarshal([]byte(inputs), &run.Inputs) != nil {
+		return Run{}, errors.New("invalid clarification history")
 	}
 	run.State = State(state)
 	var err error
@@ -292,7 +318,7 @@ func (s *Store) Prepare(ctx context.Context, id, payloadID string, payload json.
 	if payloadID == "" || !json.Valid(payload) || thread == "" || turn == "" {
 		return errors.New("prepared review requires a valid exact payload and completed thread/turn identity")
 	}
-	result, err := s.db.ExecContext(ctx, "UPDATE runs SET state='prepared',prepared=?,payload_id=?,thread_id=?,turn_id=?,updated_at=? WHERE id=? AND state='reviewing'", string(payload), payloadID, thread, turn, timestamp(), id)
+	result, err := s.db.ExecContext(ctx, "UPDATE runs SET state='prepared',prepared=?,payload_id=?,thread_id=?,turn_id=?,updated_at=? WHERE id=? AND state='reviewing' AND COALESCE(json_extract(record,'$.cancellation_requested'),0)=0 AND COALESCE(json_extract(record,'$.superseded'),0)=0", string(payload), payloadID, thread, turn, timestamp(), id)
 	return changed(result, err, "could not persist prepared review")
 }
 
@@ -327,6 +353,16 @@ func (s *Store) DecidePublication(ctx context.Context, id, payloadID string) err
 	return changed(result, err, "publication decision does not match the current prepared preview")
 }
 func (s *Store) BeginPublication(ctx context.Context, id, payloadID string, initial ...json.RawMessage) (string, bool, error) {
+	return s.beginPublication(ctx, id, payloadID, nil, initial...)
+}
+
+// BeginItemPublication binds automatic consent and its attempt to the current
+// event in the same transaction. No prior eligibility read authorizes a write.
+func (s *Store) BeginItemPublication(ctx context.Context, id, payloadID string, item InboxItem, initial json.RawMessage) (string, bool, error) {
+	return s.beginPublication(ctx, id, payloadID, &item, initial)
+}
+
+func (s *Store) beginPublication(ctx context.Context, id, payloadID string, item *InboxItem, initial ...json.RawMessage) (string, bool, error) {
 	outcome := "{}"
 	if len(initial) > 1 || (len(initial) == 1 && !json.Valid(initial[0])) {
 		return "", false, errors.New("invalid initial publication observation")
@@ -339,6 +375,28 @@ func (s *Store) BeginPublication(ctx context.Context, id, payloadID string, init
 		return "", false, errors.New("cannot begin publication claim")
 	}
 	defer tx.Rollback()
+	if item != nil {
+		if hold, err := held(ctx, tx, *item, time.Now()); err != nil {
+			return "", false, err
+		} else if hold {
+			return "", false, ErrHeld
+		}
+		var raw string
+		err = tx.QueryRowContext(ctx, `SELECT i.record FROM inbox_items i
+ JOIN discovery_scopes d ON d.repository=i.repository AND d.actor_id=i.actor_id
+ JOIN runs r ON r.id=? AND r.repository=i.repository AND r.actor_id=i.actor_id AND r.pull_id=i.pull_id
+ WHERE i.id=? AND r.state='prepared' AND r.payload_id=? AND json_extract(r.record,'$.private')=0
+ AND json_extract(d.record,'$.state')='ok' AND json_extract(d.record,'$.repository_id')=r.repository_id
+ AND json_extract(i.record,'$.run_id')=r.id`, id, item.ID, payloadID).Scan(&raw)
+		var current InboxItem
+		if err != nil || json.Unmarshal([]byte(raw), &current) != nil || current.State != "prepared" || current.EventKey != item.EventKey || current.DecisionID != item.DecisionID || current.Repository != item.Repository || current.ActorID != item.ActorID || current.PullID != item.PullID || current.HeadSHA != item.HeadSHA || current.TargetBaseSHA != item.TargetBaseSHA || current.ContextKey != item.ContextKey {
+			return "", false, errors.New("review event or decision changed before publication; no attempt was recorded")
+		}
+		result, err := tx.ExecContext(ctx, `INSERT INTO publication_decisions(run_id,payload_id,decided_at) SELECT id,payload_id,? FROM runs WHERE id=? AND payload_id=? AND state='prepared' ON CONFLICT(run_id,payload_id) DO UPDATE SET decided_at=excluded.decided_at`, timestamp(), id, payloadID)
+		if err = changed(result, err, "could not bind automatic publication consent"); err != nil {
+			return "", false, err
+		}
+	}
 	result, err := tx.ExecContext(ctx, `UPDATE runs SET state='publishing',outcome=?,updated_at=? WHERE id=? AND payload_id=? AND state='prepared' AND EXISTS(SELECT 1 FROM publication_decisions WHERE run_id=runs.id AND payload_id=runs.payload_id)`, outcome, timestamp(), id, payloadID)
 	if err != nil {
 		return "", false, errors.New("cannot claim exact-payload publication")
@@ -349,6 +407,12 @@ func (s *Store) BeginPublication(ctx context.Context, id, payloadID string, init
 	}
 	if count != 1 {
 		return "", false, nil
+	}
+	if item != nil {
+		result, err = tx.ExecContext(ctx, `UPDATE inbox_items SET record=json_set(record,'$.state','publishing','$.updated_at',?) WHERE id=? AND json_extract(record,'$.run_id')=? AND json_extract(record,'$.state')='prepared'`, timestamp(), item.ID, id)
+		if err = changed(result, err, "could not record in-flight inbox publication"); err != nil {
+			return "", false, err
+		}
 	}
 	attempt, err := newID()
 	if err != nil {
@@ -386,7 +450,13 @@ func (s *Store) Fail(ctx context.Context, id string, state State, message string
 	if state != Failed && state != Cancelled && state != Stale {
 		return errors.New("invalid review failure state")
 	}
-	result, err := s.db.ExecContext(ctx, "UPDATE runs SET state=?,failure=?,updated_at=? WHERE id=? AND state IN ('queued','reviewing','prepared')", state, message, timestamp(), id)
+	// Resolve accepted local stops in the terminal write, not an earlier read.
+	// A user's explicit cancellation takes precedence over supersession.
+	result, err := s.db.ExecContext(ctx, `UPDATE runs SET
+ state=CASE WHEN COALESCE(json_extract(record,'$.cancellation_requested'),0)=1 THEN 'cancelled'
+ WHEN COALESCE(json_extract(record,'$.superseded'),0)=1 THEN 'stale' ELSE ? END,
+ failure=?,updated_at=? WHERE id=? AND (state IN ('queued','reviewing','prepared')
+ OR (state='waiting_checks' AND ?='stale') OR (state='cancelled' AND ?='cancelled'))`, state, message, timestamp(), id, state, state)
 	return changed(result, err, "could not persist interrupted or stale review")
 }
 

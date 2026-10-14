@@ -1,9 +1,9 @@
 # Configuration and setup
 
 The configuration resolver and setup/diagnostic commands are implemented.
-Watching, reviewing pull requests and publication are not available yet.
-Examples describe the intended policies; configuring `auto` does not constitute
-proof that the future scheduler or publisher implements them.
+Private reviewing, explicit publication and the initial headless watcher are
+available. See [foreground watching](WATCHING.md) for current automation and
+recovery boundaries; whole-product acceptance remains incomplete.
 
 ## Locations
 
@@ -18,14 +18,22 @@ configuration root. An explicit `--config PATH` takes precedence over
 expanded; arbitrary environment variables are not interpolated. Profile names
 are exact local identifiers, not repository names or patterns.
 
-The default future state location is
+The default state location is
 `~/Library/Application Support/reviewd/profiles/ID` on macOS and
 `$XDG_STATE_HOME/reviewd/profiles/ID` (or `~/.local/state/reviewd/profiles/ID`)
 on Linux. ID is derived from the canonical configuration location, including
 the nearest existing ancestor before initialization. Config content changes
 and symlink aliases do not move the profile's inbox. `state.directory` selects
-an explicit alternative. XDG directories must be absolute. No durable database
-is initialized by the commands delivered in this batch.
+an explicit alternative. XDG directories must be absolute. Inbox/review/watch
+operations open the durable database; initialization and diagnostics do not.
+
+`state.retention_days` applies to old terminal private text, not unresolved
+decisions or ambiguous publication. The local watcher and `cleanup` share the
+[retention policy](RETENTION.md), preserving compact run/remote identities.
+Private source/skill/runtime storage is separately scoped under the state
+directory; see [owner/resource recovery](RECOVERY.md). The local ownership
+and durable scheduler cooldown additions advance SQLite state to schema 7;
+older binaries reject it.
 
 ## Initialize and diagnose
 
@@ -110,8 +118,12 @@ incomplete layer; it makes no GitHub or Codex calls.
 Each effective field includes provenance. Immutable snapshots retain values,
 provenance and a semantic fingerprint and can be serialized without losing
 policy. Invalid manager reloads retain the previous fully valid document;
-previously resolved snapshots do not change. Watcher reload wiring is still
-outstanding.
+previously resolved snapshots do not change. The local watcher reloads through
+that manager, preserves active-run settings, and rejects a state-directory
+change until restart. An owned continuous headless/JSON command journey
+exercises invalid reloads between successive notify/ask policies and recovery
+on a valid edit without starting a reviewer. This uses an owned GitHub peer,
+not live GitHub or a visible terminal.
 
 Explanation masks credential-shaped strings in effective values/provenance.
 When anything is masked, JSON includes `configuration.redacted: true`, retaining
@@ -147,7 +159,7 @@ listed above are permitted; all other preferences are operator controlled.
 | Event action values | `ignore`, `notify`, `ask`, `auto` |
 | `actions.publish_review` | `ask`; `never`, `ask`, `auto` |
 | `notifications.desktop`, `notifications.terminal` | `true` |
-| `notifications.quiet_start`, `notifications.quiet_end` | Empty; both HH:MM, different |
+| `notifications.quiet_start`, `notifications.quiet_end` | Empty; both H:MM or HH:MM, different clock values |
 | `notifications.timezone` | `Local`; valid IANA timezone |
 | `notifications.group_interval` | `5s`; 0–5m |
 | `review.instructions` | Empty additional review guidance |

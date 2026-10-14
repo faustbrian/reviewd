@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 )
 
-// WithoutPublication excludes only the canonically verified write itself.
+// WithoutPublications excludes only application-attributed writes themselves.
 // Other replies, requirements and thread state remain controlling context.
 func (c ReviewContext) WithoutPublications(reviewIDs []int64, commentIDs []int64) ReviewContext {
 	ownedReviews := map[int64]bool{}

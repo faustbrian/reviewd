@@ -528,11 +528,12 @@ func validate(values map[string]any) error {
 	}
 	start, end := values["notifications.quiet_start"].(string), values["notifications.quiet_end"].(string)
 	if start != "" || end != "" {
-		if _, err := time.Parse("15:04", start); err != nil {
-			return errors.New("notifications.quiet_start must be HH:MM when quiet hours are enabled")
+		startClock, err := time.Parse("15:04", start)
+		if err != nil {
+			return errors.New("notifications.quiet_start must be H:MM or HH:MM when quiet hours are enabled")
 		}
-		if _, err := time.Parse("15:04", end); err != nil || start == end {
-			return errors.New("notifications.quiet_end must be HH:MM and differ from quiet_start")
+		if endClock, err := time.Parse("15:04", end); err != nil || startClock.Equal(endClock) {
+			return errors.New("notifications.quiet_end must be H:MM or HH:MM and differ from quiet_start by clock value")
 		}
 	}
 	if _, err := time.LoadLocation(values["notifications.timezone"].(string)); err != nil {
@@ -579,4 +580,11 @@ func (m *Manager) Resolve(repository string, preferences *RepositoryPreferences,
 	document := m.document
 	m.mu.RUnlock()
 	return Resolve(document, repository, preferences, overrides)
+}
+
+// Document captures the immutable validated operator document for one dispatch.
+func (m *Manager) Document() *Document {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.document
 }

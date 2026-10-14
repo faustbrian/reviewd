@@ -21,6 +21,9 @@ func (p Publisher) Repair(ctx context.Context, document *config.Document, id, ex
 	if err != nil {
 		return run, err
 	}
+	if run.Archive != nil {
+		return run, errors.New("private review evidence expired; inspect its recorded conversation or start a fresh review, not a publication retry")
+	}
 	if expected == "" || expected != run.PayloadID {
 		return run, errors.New("repair requires the exact stored preview identity via --payload")
 	}
@@ -63,17 +66,11 @@ func (p Publisher) Repair(ctx context.Context, document *config.Document, id, ex
 	if missing.Key == "" {
 		return run, errors.New("remote inventory differs but no source finding is missing; inspect it rather than adding duplicates")
 	}
-	acquire := p.Source
-	if acquire == nil {
-		acquire = func(ctx context.Context, pull github.Pull) (*source.Snapshot, error) {
-			return p.GitHub.Source(ctx, pull, "")
-		}
-	}
-	snapshot, err := acquire(ctx, prepared.Boundary.Pull)
+	snapshot, closeSource, err := p.acquireSource(ctx, prepared.Boundary.Pull)
 	if err != nil {
 		return run, err
 	}
-	defer func() { resultErr = errors.Join(resultErr, snapshot.Close()) }()
+	defer func() { resultErr = errors.Join(resultErr, closeSource()) }()
 	anchors, err := source.ParseAnchors(snapshot.Diff)
 	if err != nil {
 		return run, err

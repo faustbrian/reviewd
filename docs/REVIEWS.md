@@ -3,7 +3,8 @@
 The development version currently supports manual private preparation, a
 durable run inbox and exact preview. Explicit publication and reconciliation
 are described in [publication and recovery](PUBLICATION.md). The automatic
-watcher, notifications and terminal UI are not available yet. A prepared review is not
+watcher is described in [foreground watching](WATCHING.md); notifications and
+terminal UI are not available yet. A prepared review is not
 a posted review or formal GitHub approval.
 
 ## Commands
@@ -33,7 +34,8 @@ a fresh explicit decision for the exact prepared payload, subject to
 the operator's publication policy.
 
 Pending mandatory checks leave durable `waiting_checks` work without starting
-a model turn. This version does not yet automatically resume waiting work;
+a model turn. Item-linked watcher runs resume when checks settle. Standalone
+manual URL reviews are not automatically adopted by the watcher;
 invoke the explicit review again after checks settle, or use `--now` to review
 immediately while retaining the mandatory readiness gap. Failed, skipped,
 missing and unavailable mandatory checks are never treated as passing.
@@ -90,8 +92,9 @@ then matched to the exact head and required integration. Legacy statuses are
 read from the immutable-head endpoint. When a required name has both a check
 run and a legacy status, both remain visible and must pass; a failed component
 cannot hide a pending sibling. An aggregate status is not a substitute. Inaccessible protection and unresolved required reusable
-workflow identities are currently explicit readiness gaps. Full reusable
-workflow identity verification remains outstanding.
+workflow identities are explicit readiness gaps. The current adapter does not
+verify reusable-workflow source identity; it reports these requirements as
+unavailable and cannot turn them into a clean approval.
 
 ## Selected skill and worker
 
@@ -129,8 +132,11 @@ outstanding.
 A run retains frozen configuration/provenance, relevant context/skill identity,
 review revisions, exact preview, available model/usage and thread/turn metadata.
 Temporary Git objects, frozen instruction bundles and worker processes are
-removed when no longer needed. Retention automation and interrupted-thread
-resumption remain outstanding; a stored thread ID alone is not recovery proof.
+removed when shutdown is proven; uncertain children retain their owned storage.
+Local [retention](RETENTION.md) expires eligible private text, while
+[owner/resource recovery](RECOVERY.md) classifies interrupted work without
+resuming an old thread or replaying an answer. Stored thread IDs alone never
+prove liveness or resumability. These additions follow the older `f73eab6` snapshot.
 
 Plain and JSON commands describe the same durable runs. JSON schema version 1
 is a presentation API, not an import format for granting execution authority.

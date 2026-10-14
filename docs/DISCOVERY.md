@@ -69,11 +69,10 @@ reads reuse a bounded in-memory representation only after fresh authenticated
 persistent; a new process begins with complete reads.
 
 `sync` does not run a reviewer or send a notification. New automatic-policy
-events can be stored as queued, but continuous processing requires the watcher
-and scheduler, which are not yet delivered. For now, start an explicit private
-review with `reviewd review <pr-url> --private`, inspect its run, and separately
-select its publication payload. Initial-backlog opt-in and item-linked start
-commands remain part of the outstanding scheduler work.
+events are stored as queued and processed by `watch --headless`; see
+[foreground watching](WATCHING.md). `start <item-id>` explicitly releases one
+held event for a private review; `skip <item-id>` retains its event-scoped choice.
+Standalone private URL review and exact-payload publication remain available.
 
 SQLite schema 2 adds discovery observations, status, inbox items, and follow
 preferences without replacing existing private previews or publication facts.
@@ -87,5 +86,8 @@ both distinguish cached work, failed discovery, prepared runs, and actual
 publication records.
 
 Current evidence uses owned HTTP/SQLite fixtures, not live team membership or
-GitHub discovery acceptance. Continuous polling/backoff, automatic scheduling,
-notifications, snooze, and the TUI remain outstanding.
+GitHub discovery acceptance. The local scheduler, notifications and personal
+holds have owned journey coverage. The [optional terminal inbox](TERMINAL.md)
+uses the same application behavior. Owner-aware recovery is also wired; final
+native acceptance remains outstanding. See [watching](WATCHING.md) for durable
+server cooldown and retry behavior.

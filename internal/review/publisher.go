@@ -42,6 +42,16 @@ type PublicationOutcome struct {
 }
 
 func (p Publisher) Publish(ctx context.Context, document *config.Document, id, expected string, automatic bool) (result store.Run, resultErr error) {
+	return p.publish(ctx, document, id, expected, automatic, nil)
+}
+
+// PublishItem keeps scheduler-origin automatic authority bound through preflight
+// to the store's atomic publication claim, including intervening local choices.
+func (p Publisher) PublishItem(ctx context.Context, document *config.Document, id, expected string, item store.InboxItem) (store.Run, error) {
+	return p.publish(ctx, document, id, expected, true, &item)
+}
+
+func (p Publisher) publish(ctx context.Context, document *config.Document, id, expected string, automatic bool, item *store.InboxItem) (result store.Run, resultErr error) {
 	if p.GitHub == nil || p.Store == nil {
 		return store.Run{}, errors.New("publication dependencies are unavailable")
 	}
@@ -50,6 +60,9 @@ func (p Publisher) Publish(ctx context.Context, document *config.Document, id, e
 	run, err := p.Store.Get(ctx, id)
 	if err != nil {
 		return run, err
+	}
+	if run.Archive != nil {
+		return run, errors.New("private review evidence expired; inspect its recorded conversation or start a fresh review, not a publication retry")
 	}
 	var prepared PreparedResult
 	if json.Unmarshal(run.Prepared, &prepared) != nil || ValidatePrepared(prepared) != nil || prepared.PayloadID != run.PayloadID {
@@ -96,17 +109,11 @@ func (p Publisher) Publish(ctx context.Context, document *config.Document, id, e
 	if pull.Draft && !policy.Bool("watch.include_drafts") {
 		return run, errors.New("draft pull request is not eligible under current operator policy")
 	}
-	acquire := p.Source
-	if acquire == nil {
-		acquire = func(ctx context.Context, pull github.Pull) (*source.Snapshot, error) {
-			return p.GitHub.Source(ctx, pull, "")
-		}
-	}
-	snapshot, err := acquire(ctx, pull)
+	snapshot, closeSource, err := p.acquireSource(ctx, pull)
 	if err != nil {
 		return run, err
 	}
-	defer func() { resultErr = errors.Join(resultErr, snapshot.Close()) }()
+	defer func() { resultErr = errors.Join(resultErr, closeSource()) }()
 	anchors, err := source.ParseAnchors(snapshot.Diff)
 	if err != nil {
 		return run, err
@@ -171,15 +178,22 @@ func (p Publisher) Publish(ctx context.Context, document *config.Document, id, e
 	if run.PayloadID != expected {
 		return run, errors.New("evidence changed during preflight; inspect the new preview before publishing")
 	}
-	if err = p.Store.DecidePublication(ctx, id, expected); err != nil {
-		return run, err
+	if item == nil {
+		if err = p.Store.DecidePublication(ctx, id, expected); err != nil {
+			return run, err
+		}
 	}
 	initial := PublicationOutcome{ReviewedHead: pull.HeadSHA, Existing: remoteID != 0, Review: github.RemoteReview{ID: remoteID}, Comments: []github.RemoteComment{}}
 	for _, row := range history.Reviews {
 		initial.InitialReviewIDs = append(initial.InitialReviewIDs, row.ID)
 	}
 	initialData, _ := json.Marshal(initial)
-	_, claimed, err := p.Store.BeginPublication(ctx, id, expected, initialData)
+	var claimed bool
+	if item == nil {
+		_, claimed, err = p.Store.BeginPublication(ctx, id, expected, initialData)
+	} else {
+		_, claimed, err = p.Store.BeginItemPublication(ctx, id, expected, *item, initialData)
+	}
 	if err != nil {
 		return run, err
 	}
@@ -198,6 +212,11 @@ func (p Publisher) Publish(ctx context.Context, document *config.Document, id, e
 		comments = append(comments, github.ReviewComment{Path: comment.Path, Side: comment.Side, Line: comment.Line, Body: comment.Body})
 	}
 	remote, submitErr := p.GitHub.CreateReview(ctx, pull, github.ReviewSubmission{CommitID: pull.HeadSHA, Event: prepared.Event, Body: prepared.Body, Comments: comments})
+	if github.RetryAfter(submitErr) > 0 {
+		// The response does not certify the remote outcome. Retain the attempt
+		// for explicit reconciliation, but do not read through a known limit.
+		return p.recordUnknown(run, initial, "GitHub deferred publication readback; outcome remains unknown; reconcile after the server retry deadline", submitErr)
+	}
 	// Even an HTTP error must reconcile. Cancellation does not erase a write.
 	reconcileCtx, stop := context.WithTimeout(context.Background(), 30*time.Second)
 	defer stop()
@@ -266,9 +285,9 @@ func (p Publisher) reconcileOnce(ctx context.Context, run store.Run, prepared Pr
 	if outcome.PendingRepair != nil && repairHint > 0 {
 		outcome.PendingRepair.CandidateID = repairHint
 	}
-	fail := func(message string) (store.Run, error) {
+	fail := func(message string, causes ...error) (store.Run, error) {
 		if run.State == store.Published {
-			return run, errors.New(message + "; the earlier verified publication remains recorded")
+			return run, errors.Join(errors.New(message+"; the earlier verified publication remains recorded"), errors.Join(causes...))
 		}
 		// Keep already observed remote identities visible when fresh readback fails;
 		// retained evidence is not a claim that the current inventory is verified.
@@ -288,22 +307,16 @@ func (p Publisher) reconcileOnce(ctx context.Context, run store.Run, prepared Pr
 		if outcome.CurrentHead == "" {
 			outcome.CurrentHead = prior.CurrentHead
 		}
-		outcome.Failure = message
-		data, _ := json.Marshal(outcome)
-		saveCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
-		defer stop()
-		err := p.Store.MarkOutcome(saveCtx, run, store.PublicationUnknown, data)
-		current, getErr := p.Store.Get(saveCtx, run.ID)
-		return current, errors.Join(errors.New(message), err, getErr)
+		return p.recordUnknown(run, outcome, message, causes...)
 	}
 	actor, err := p.GitHub.Identity(ctx)
 	if err != nil || actor.ID != run.ActorID {
-		return fail("publication identity could not be re-established; no retry was submitted")
+		return fail("publication identity could not be re-established; no retry was submitted", err)
 	}
 	if remoteID == 0 {
 		history, err := p.GitHub.PublicationHistory(ctx, prepared.Boundary.Pull)
 		if err != nil {
-			return fail("publication history is unavailable; outcome remains unknown")
+			return fail("publication history is unavailable; outcome remains unknown", err)
 		}
 		excluded := map[int64]bool{}
 		for _, id := range outcome.InitialReviewIDs {
@@ -323,12 +336,12 @@ func (p Publisher) reconcileOnce(ctx context.Context, run store.Run, prepared Pr
 	}
 	remote, err := p.GitHub.Review(ctx, prepared.Boundary.Pull, remoteID)
 	if err != nil || !matchingReview(remote, prepared) || remote.ID != remoteID || !reviewURL(remote.URL, prepared.Boundary.Pull.URL, "pullrequestreview-", remoteID) {
-		return fail("remote review identity, event, body or timestamp did not match the submission")
+		return fail("remote review identity, event, body or timestamp did not match the submission", err)
 	}
 	outcome.Review = remote
 	comments, err := p.GitHub.ReviewComments(ctx, prepared.Boundary.Pull, remoteID)
 	if err != nil {
-		return fail("remote inline readback was unavailable; publication was not verified")
+		return fail("remote inline readback was unavailable; publication was not verified", err)
 	}
 	if outcome.PendingRepair != nil {
 		intent := outcome.PendingRepair
@@ -346,7 +359,7 @@ func (p Publisher) reconcileOnce(ctx context.Context, run store.Run, prepared Pr
 		if candidate == 0 {
 			history, err := p.GitHub.PublicationHistory(ctx, prepared.Boundary.Pull)
 			if err != nil {
-				return fail("repair history is unavailable; no repair was retried")
+				return fail("repair history is unavailable; no repair was retried", err)
 			}
 			previous := map[int64]bool{}
 			for _, id := range intent.PreviousIDs {
@@ -366,7 +379,7 @@ func (p Publisher) reconcileOnce(ctx context.Context, run store.Run, prepared Pr
 		}
 		repaired, err := p.GitHub.Comment(ctx, prepared.Boundary.Pull, candidate)
 		if err != nil || repaired.ID != candidate || repaired.User.ID != run.ActorID || !matchingComment(repaired, wanted, outcome.ReviewedHead) || !reviewURL(repaired.URL, prepared.Boundary.Pull.URL, "discussion_r", candidate) {
-			return fail("repair inline identity or canonical readback did not match")
+			return fail("repair inline identity or canonical readback did not match", err)
 		}
 		outcome.Repairs = append(outcome.Repairs, repaired)
 		outcome.PendingRepair = nil
@@ -375,7 +388,7 @@ func (p Publisher) reconcileOnce(ctx context.Context, run store.Run, prepared Pr
 	for _, repair := range outcome.Repairs {
 		canonical, err := p.GitHub.Comment(ctx, prepared.Boundary.Pull, repair.ID)
 		if err != nil || canonical.ID != repair.ID || canonical.User.ID != run.ActorID || !reviewURL(canonical.URL, prepared.Boundary.Pull.URL, "discussion_r", canonical.ID) {
-			return fail("previously repaired inline could not be canonically verified")
+			return fail("previously repaired inline could not be canonically verified", err)
 		}
 		var wanted Comment
 		for _, row := range prepared.Comments {
@@ -389,7 +402,7 @@ func (p Publisher) reconcileOnce(ctx context.Context, run store.Run, prepared Pr
 		}
 		repairReview, err := p.GitHub.Review(ctx, prepared.Boundary.Pull, canonical.ReviewID)
 		if err != nil || repairReview.ID != canonical.ReviewID || repairReview.User.ID != run.ActorID || repairReview.CommitID != outcome.ReviewedHead || !reviewURL(repairReview.URL, prepared.Boundary.Pull.URL, "pullrequestreview-", repairReview.ID) {
-			return fail("repaired inline review identity could not be verified")
+			return fail("repaired inline review identity could not be verified", err)
 		}
 		comments = append(comments, canonical)
 	}
@@ -414,19 +427,19 @@ func (p Publisher) reconcileOnce(ctx context.Context, run store.Run, prepared Pr
 	}
 	current, err := p.GitHub.Pull(ctx, run.Repository, run.Number)
 	if err != nil || current.RepositoryID != run.RepositoryID || current.ID != run.PullID {
-		return fail("post-publication pull identity could not be verified")
+		return fail("post-publication pull identity could not be verified", err)
 	}
 	outcome.CurrentHead = current.HeadSHA
 	contextChanged := false
 	if !missing {
 		remoteContext, contextErr := p.GitHub.Context(ctx, current)
 		if contextErr != nil {
-			return fail("post-publication controlling context was unavailable")
+			return fail("post-publication controlling context was unavailable", contextErr)
 		}
 		contextChanged = publicationContext(remoteContext, outcome).Digest != prepared.Boundary.ContextDigest
 		checks, checkErr := p.GitHub.Checks(ctx, current)
 		if checkErr != nil {
-			return fail("post-publication mandatory evidence was unavailable")
+			return fail("post-publication mandatory evidence was unavailable", checkErr)
 		}
 		outcome.CurrentChecks = &checks
 		boundary := prepared.Boundary
@@ -467,3 +480,15 @@ func reviewURL(actual, pull, prefix string, id int64) bool {
 	return err == nil && expectedErr == nil && value.Scheme == "https" && value.User == nil && value.RawQuery == "" && !value.ForceQuery && strings.EqualFold(value.Host, expected.Host) && strings.EqualFold(value.Path, expected.Path) && value.Fragment == prefix+fmtInt(id)
 }
 func fmtInt(value int64) string { return strconv.FormatInt(value, 10) }
+
+// recordUnknown is the publication owner's existing durable outcome boundary;
+// a server hold is not evidence that a submitted write did or did not happen.
+func (p Publisher) recordUnknown(run store.Run, outcome PublicationOutcome, message string, causes ...error) (store.Run, error) {
+	outcome.Failure = message
+	data, _ := json.Marshal(outcome)
+	saveCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	err := p.Store.MarkOutcome(saveCtx, run, store.PublicationUnknown, data)
+	current, getErr := p.Store.Get(saveCtx, run.ID)
+	return current, errors.Join(errors.New(message), errors.Join(causes...), err, getErr)
+}

@@ -13,8 +13,10 @@ import (
 	"github.com/faustbrian/reviewd/internal/codex"
 	"github.com/faustbrian/reviewd/internal/config"
 	"github.com/faustbrian/reviewd/internal/github"
+	"github.com/faustbrian/reviewd/internal/lifetime"
 	"github.com/faustbrian/reviewd/internal/review"
 	"github.com/faustbrian/reviewd/internal/store"
+	"github.com/faustbrian/reviewd/internal/terminal"
 	"github.com/spf13/cobra"
 )
 
@@ -64,6 +66,7 @@ func (e *execution) reviewCommand(deps Dependencies) *cobra.Command {
 			return failure(1, err.Error())
 		}
 		defer durable.Close()
+		e.recoverBeforeWork(command, durable)
 		client, err := deps.GitHub(command.Context(), policy.String("github.host"))
 		if err != nil {
 			return failure(1, err.Error())
@@ -81,7 +84,7 @@ func (e *execution) reviewCommand(deps Dependencies) *cobra.Command {
 				})
 			}
 		}
-		service := review.Service{GitHub: client, Store: durable, SkillPath: skillPath, Source: deps.Source, Worker: worker}
+		service := review.Service{GitHub: client, Store: durable, SkillPath: skillPath, Source: deps.Source, Worker: withReviewSlot(directory, worker)}
 		run, err := service.Start(command.Context(), document, ref, overrides, private, now)
 		if err != nil {
 			if run.ID != "" {
@@ -100,7 +103,7 @@ func runPrivateWorker(ctx context.Context, request review.WorkerRequest, progres
 
 func executePrivateWorker(ctx context.Context, request review.WorkerRequest, progress func(codex.Message), effort string, allowSpecialist bool) (output codex.ReviewOutput, err error) {
 	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	version, probeErr := exec.CommandContext(probeCtx, request.Policy.String("reviewer.executable"), "--version").Output()
+	version, probeErr := lifetime.Output(probeCtx, exec.CommandContext(probeCtx, request.Policy.String("reviewer.executable"), "--version"))
 	cancel()
 	if probeErr != nil || strings.TrimSpace(string(version)) != "codex-cli 0.162.1" {
 		return output, errors.New("private review requires the tested Codex CLI 0.162.1; run reviewd doctor for compatibility guidance")
@@ -113,11 +116,15 @@ func executePrivateWorker(ctx context.Context, request review.WorkerRequest, pro
 	if err = worker.CheckAccount(ctx); err != nil {
 		return output, err
 	}
-	turn := codex.ReviewRequest{Model: request.Policy.String("reviewer.model"), Effort: effort, SkillPath: request.Skill.Path, SkillName: request.Skill.Identity.Name, Prompt: request.Prompt, Evidence: request.Evidence, OnProgress: progress}
+	turn := codex.ReviewRequest{Model: request.Policy.String("reviewer.model"), Effort: effort, SkillPath: request.Skill.Path, SkillName: request.Skill.Identity.Name, Prompt: request.Prompt, Evidence: request.Evidence, OnProgress: progress, OnStatus: request.OnStatus, OnInput: request.OnInput, OnInputEvent: request.OnInputEvent, Participant: request.Participant}
 	if allowSpecialist {
 		turn.OutputSchema = review.OutputSchema()
 		turn.OnSpecialist = func(ctx context.Context, task codex.SpecialistRequest) (codex.SpecialistOutput, error) {
 			leaf := request
+			// A specialist has a distinct session. It must not replace its
+			// parent's durable thread/turn identity with its own.
+			leaf.OnStatus = nil
+			leaf.Participant = "specialist"
 			leaf.Prompt = "As the sole independent specialist, audit the complete causal slice for this bounded task, treating any claims in the task as unverified. Return raw source-backed findings, gaps and counterevidence to the primary reviewer; do not publish or spawn further agents. Task: " + task.Task + ". Scope paths: " + strings.Join(task.Paths, ", ") + ". Frozen PR context and evidence access:\n" + request.Prompt
 			result, err := executePrivateWorker(ctx, leaf, progress, task.Effort, false)
 			return codex.SpecialistOutput{Task: task.Task, Effort: task.Effort, Text: result.Text, ThreadID: result.ThreadID, TurnID: result.TurnID, RequestedModel: result.RequestedModel, EffectiveModel: result.EffectiveModel, Usage: result.Usage}, err
@@ -176,9 +183,14 @@ func (e *execution) showCommand() *cobra.Command {
 	}
 	return command
 }
-func (e *execution) inboxCommand() *cobra.Command {
+func (e *execution) inboxCommand(deps Dependencies) *cobra.Command {
+	var interactive bool
 	command := &cobra.Command{Use: "inbox", Short: "List private reviews in the selected durable profile", Args: cobra.NoArgs}
+	command.Flags().BoolVar(&interactive, "interactive", false, "Attach the optional keyboard inbox; redirected/JSON output stays plain")
 	command.RunE = func(command *cobra.Command, _ []string) error {
+		if interactive && !e.json && terminal.IsTerminal(command.InOrStdin(), command.OutOrStdout()) {
+			return e.attachInbox(command, deps, false)
+		}
 		durable, err := e.localStore(command)
 		if err != nil {
 			return failure(1, err.Error())
@@ -210,7 +222,48 @@ func (e *execution) presentRun(output io.Writer, run store.Run) error {
 		return writeJSON(output, map[string]any{"schema_version": 1, "run": json.RawMessage(safe), "redacted": safe != string(data)})
 	}
 	fmt.Fprintf(output, "Review %s\nRepository: %q #%d\nState: %s\n", run.ID, redact(run.Repository), run.Number, run.State)
+	if run.CancellationRequested && run.State != store.Cancelled {
+		fmt.Fprintln(output, "Cancellation requested; the private worker has not yet confirmed that it stopped.")
+	}
+	if run.Superseded && run.State == store.Reviewing && !run.CancellationRequested {
+		fmt.Fprintln(output, "Review evidence superseded; the private worker is stopping. This run does not certify the current pull request.")
+	}
 	fmt.Fprintf(output, "GitHub identity: %q\n", redact(run.ActorLogin))
+	if run.Archive != nil {
+		fmt.Fprintf(output, "Private review text expired: %s; retained summary only, not reusable review evidence.\n", terminalText(run.Archive.ExpiredAt))
+		if run.Archive.HeadSHA != "" {
+			label := "Archived source head"
+			if run.Archive.Reviewed {
+				label = "Archived reviewed head"
+			}
+			fmt.Fprintf(output, "%s: %s\nTarget base: %s\nComparison base: %s\n", label, terminalText(run.Archive.HeadSHA), terminalText(run.Archive.TargetBaseSHA), terminalText(run.Archive.MergeBaseSHA))
+		}
+		if run.Archive.Effort != "" {
+			fmt.Fprintf(output, "Reasoning effort: %q\n", redact(run.Archive.Effort))
+		}
+	}
+	if run.ThreadID != "" {
+		fmt.Fprintf(output, "Thread: %q\n", redact(run.ThreadID))
+	}
+	if run.TurnID != "" {
+		fmt.Fprintf(output, "Turn: %q\n", redact(run.TurnID))
+	}
+	if run.State == store.Reviewing && run.Progress != "" {
+		fmt.Fprintf(output, "Activity: %s\n", terminalText(run.Progress))
+	}
+	var usage struct {
+		TokenUsage struct {
+			Total struct {
+				TotalTokens *int64 `json:"totalTokens"`
+			} `json:"total"`
+		} `json:"tokenUsage"`
+	}
+	if json.Unmarshal(run.Usage, &usage) == nil && usage.TokenUsage.Total.TotalTokens != nil {
+		fmt.Fprintf(output, "Reported token usage: %d total\n", *usage.TokenUsage.Total.TotalTokens)
+	}
+	for _, input := range run.Inputs {
+		fmt.Fprintf(output, "Input: %s (%s, %s) — inspect reviewd inputs %s\n", input.ID, input.State, input.Participant, run.ID)
+	}
 	if run.State == store.Prepared {
 		fmt.Fprintln(output, "Prepared privately; not published.")
 	}

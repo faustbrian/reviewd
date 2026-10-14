@@ -85,6 +85,9 @@ func (s Service) Sync(ctx context.Context, document *config.Document) error {
 		if err != nil {
 			saveErr := s.Store.DiscoveryFailure(ctx, scopes[repository], err.Error())
 			failures = errors.Join(failures, fmt.Errorf("%s: %w", repository, err), saveErr)
+			if github.RetryAfter(err) > 0 {
+				break // All repositories share this authenticated host's constraint.
+			}
 		}
 	}
 	return failures
@@ -127,12 +130,14 @@ func (s Service) syncRepository(ctx context.Context, document *config.Document, 
 		return err
 	}
 	for _, run := range runs {
-		if run.Repository != scope.Repository || run.RepositoryID != repositoryID || run.ActorID != actor.ID || len(run.Prepared) == 0 {
+		if run.Repository != scope.Repository || run.RepositoryID != repositoryID || run.ActorID != actor.ID {
 			continue
 		}
-		var prepared review.PreparedResult
-		if json.Unmarshal(run.Prepared, &prepared) != nil || review.ValidatePrepared(prepared) != nil {
-			continue
+		if run.Archive == nil || !run.Archive.Reviewed {
+			var prepared review.PreparedResult
+			if json.Unmarshal(run.Prepared, &prepared) != nil || review.ValidatePrepared(prepared) != nil {
+				continue
+			}
 		}
 		if _, explicit := tracking[run.PullID]; !explicit {
 			tracking[run.PullID] = store.FollowState{PullID: run.PullID, Number: run.Number, Following: true}
@@ -273,28 +278,9 @@ func (s Service) syncRepository(ctx context.Context, document *config.Document, 
 			}
 
 			// Exclude only application-recorded writes, not all activity by this user.
-			for _, run := range runs {
-				if run.Repository != scope.Repository || run.PullID != pull.ID || run.ActorID != actor.ID || len(run.Outcome) == 0 {
-					continue
-				}
-				var outcome review.PublicationOutcome
-				if json.Unmarshal(run.Outcome, &outcome) != nil {
-					return errors.New("stored publication evidence is invalid")
-				}
-				reviews, comments := []int64{}, []int64{}
-				if !outcome.Existing && outcome.Review.ID > 0 && outcome.Review.URL != "" {
-					reviews = append(reviews, outcome.Review.ID)
-					for _, row := range outcome.Comments {
-						if row.ReviewID == outcome.Review.ID {
-							comments = append(comments, row.ID)
-						}
-					}
-				}
-				for _, row := range outcome.Repairs {
-					reviews = append(reviews, row.ReviewID)
-					comments = append(comments, row.ID)
-				}
-				current.Context = current.Context.WithoutPublications(reviews, comments)
+			current.Context, err = review.EventContext(current.Context, pull.Pull, actor, runs)
+			if err != nil {
+				return err
 			}
 			if tracked && !followState.Following && !newRequest(current.RelevantRequests, followState.IgnoredRequests) {
 				current.Owed = false
@@ -304,8 +290,10 @@ func (s Service) syncRepository(ctx context.Context, document *config.Document, 
 				return err
 			}
 		}
+		headChanged := old.Pull.ID != 0 && old.Pull.HeadSHA != pull.HeadSHA
+		contextChanged := old.Pull.ID != 0 && (old.Pull.TargetBaseSHA != pull.TargetBaseSHA || old.Pull.Title != pull.Title || old.Pull.Body != pull.Body || (old.Context.Digest != "" && current.Context.Digest != "" && old.Context.DiscoveryDigest() != current.Context.DiscoveryDigest()))
 		raw, _ := json.Marshal(current)
-		rows = append(rows, store.Observation{PullID: pull.ID, Number: pull.Number, Record: raw})
+		rows = append(rows, store.Observation{PullID: pull.ID, Number: pull.Number, HeadSHA: pull.HeadSHA, Record: raw, MaterialChange: headChanged || contextChanged})
 
 		if !relevant {
 			if old.Owed || old.Following || old.Own {
@@ -320,8 +308,6 @@ func (s Service) syncRepository(ctx context.Context, document *config.Document, 
 			continue
 		}
 		newExplicit := newRequest(current.RelevantRequests, old.RelevantRequests)
-		headChanged := old.Pull.ID != 0 && old.Pull.HeadSHA != pull.HeadSHA
-		contextChanged := old.Pull.ID != 0 && (old.Pull.TargetBaseSHA != pull.TargetBaseSHA || old.Pull.Title != pull.Title || old.Pull.Body != pull.Body || (old.Context.Digest != "" && old.Context.DiscoveryDigest() != current.Context.DiscoveryDigest()))
 		// Becoming eligible is not a new event. Existing first-action work stays
 		// held unless a real request, code or acquired controlling context changed.
 		eventBaseline := baseline || (old.Pull.ID != 0 && !newExplicit && !headChanged && !contextChanged)

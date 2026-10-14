@@ -25,13 +25,15 @@ import (
 
 func TestExplicitPublicationVerifiesPinnedReviewWithoutStartingCodex(t *testing.T) {
 	cases := []struct {
-		name                                                                                                                                                                                                                                                              string
-		self, lost, hidden, partial, mixedURL, contextChanged, noDecision, never, existingInline, requirementChanged, existingReview, repairLost, repairHidden, checksChanged, postCheckChanged, clean, twoFindings, repairRace, resolvedThread, partialOutage, repairABA bool
-		state                                                                                                                                                                                                                                                             store.State
-		code                                                                                                                                                                                                                                                              int
-		posts                                                                                                                                                                                                                                                             int
+		name                                                                                                                                                                                                                                                                               string
+		self, lost, hidden, partial, mixedURL, contextChanged, noDecision, never, existingInline, requirementChanged, existingReview, repairLost, repairHidden, checksChanged, postCheckChanged, clean, twoFindings, repairRace, resolvedThread, partialOutage, repairABA, uncertainSource bool
+		state                                                                                                                                                                                                                                                                              store.State
+		code                                                                                                                                                                                                                                                                               int
+		posts                                                                                                                                                                                                                                                                              int
 	}{
 		{name: "normal", state: store.Published, posts: 1},
+		{name: "source_shutdown_uncertain", uncertainSource: true, state: store.Prepared, code: 1},
+		{name: "repair_source_shutdown_uncertain", uncertainSource: true, partial: true, state: store.Partial, code: 1, posts: 1},
 		{name: "checks_refresh_rebinds_consent", checksChanged: true, state: store.Prepared, code: 1},
 		{name: "checks_fail_during_approval", postCheckChanged: true, clean: true, state: store.Stale, posts: 1},
 		{name: "adopt_existing_review", existingReview: true, state: store.Published},
@@ -55,7 +57,8 @@ func TestExplicitPublicationVerifiesPinnedReviewWithoutStartingCodex(t *testing.
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
 			root := t.TempDir()
 			fixture := filepath.Join(root, "repository")
 			if err := os.Mkdir(fixture, 0700); err != nil {
@@ -467,13 +470,19 @@ func TestExplicitPublicationVerifiesPinnedReviewWithoutStartingCodex(t *testing.
 				}
 				return Run(ctx, args, &out, &diagnostics, deps), diagnostics.String()
 			}
+			var uncertain *uncertainPublicationSource
+			beforeSource := observedPublication(t, durable, run.ID)
+			if tc.uncertainSource && !tc.partial {
+				uncertain = newUncertainPublicationSource(t)
+				deps.Source = uncertain.acquire
+			}
 			code, message := invoke()
 			if code != tc.code {
 				t.Fatalf("publication exit: got %d want %d: %s", code, tc.code, message)
 			}
 			stored, err := durable.Get(ctx, run.ID)
 			if err != nil || stored.State != tc.state {
-				t.Fatalf("state: got %s want %s outcome=%s error=%v", stored.State, tc.state, stored.Outcome, err)
+				t.Fatalf("state: got %s want %s outcome=%s error=%v diagnostic=%s", stored.State, tc.state, stored.Outcome, err, message)
 			}
 			mu.Lock()
 			gotPosts := posts
@@ -496,6 +505,10 @@ func TestExplicitPublicationVerifiesPinnedReviewWithoutStartingCodex(t *testing.
 			mu.Unlock()
 			if gotPosts != tc.posts {
 				t.Fatalf("writes: got %d want %d", gotPosts, tc.posts)
+			}
+			if uncertain != nil {
+				uncertain.assertRecovered(t, durable, directory, beforeSource)
+				return
 			}
 			if tc.existingInline {
 				var referenced review.PreparedResult
@@ -551,7 +564,7 @@ func TestExplicitPublicationVerifiesPinnedReviewWithoutStartingCodex(t *testing.
 				go func() { _, err := publisher.Repair(ctx, nil, run.ID, prepared.PayloadID); staleDone <- err }()
 				select {
 				case <-historyCaptured:
-				case <-time.After(5 * time.Second):
+				case <-ctx.Done():
 					t.Fatal("stale repair history not captured")
 				}
 				first, _ := publisher.Repair(ctx, nil, run.ID, prepared.PayloadID)
@@ -564,7 +577,7 @@ func TestExplicitPublicationVerifiesPinnedReviewWithoutStartingCodex(t *testing.
 					if err == nil {
 						t.Error("stale preflight was allowed to write")
 					}
-				case <-time.After(5 * time.Second):
+				case <-ctx.Done():
 					t.Fatal("stale repair did not finish")
 				}
 				after := observedPublication(t, durable, run.ID)
@@ -612,6 +625,23 @@ func TestExplicitPublicationVerifiesPinnedReviewWithoutStartingCodex(t *testing.
 				mu.Unlock()
 			}
 			if tc.partial {
+				if tc.uncertainSource {
+					uncertain = newUncertainPublicationSource(t)
+					deps.Source = uncertain.acquire
+					repairRequested = true
+					code, message = invoke()
+					if code != 1 {
+						t.Fatalf("uncertain repair unexpectedly succeeded: %d %s", code, message)
+					}
+					uncertain.assertRecovered(t, durable, directory, stored)
+					mu.Lock()
+					roots, repairs := posts, repairPosts
+					mu.Unlock()
+					if roots != 1 || repairs != 0 {
+						t.Fatalf("uncertain repair or recovery submitted content: reviews=%d repairs=%d", roots, repairs)
+					}
+					return
+				}
 				if tc.repairRace {
 					mu.Lock()
 					staleReadArmed = true
@@ -620,7 +650,9 @@ func TestExplicitPublicationVerifiesPinnedReviewWithoutStartingCodex(t *testing.
 					go func() { code, _ := invoke(); readerDone <- code }()
 					select {
 					case <-readerCaptured:
-					case <-time.After(5 * time.Second):
+					case code := <-readerDone:
+						t.Fatalf("stale reader returned before capture: %d", code)
+					case <-ctx.Done():
 						t.Fatal("stale reader was not captured")
 					}
 					repairRequested = true
@@ -637,12 +669,14 @@ func TestExplicitPublicationVerifiesPinnedReviewWithoutStartingCodex(t *testing.
 					}()
 					select {
 					case <-repairEntered:
-					case <-time.After(5 * time.Second):
+					case result := <-writerDone:
+						t.Fatalf("repair returned before its captured write: %d %s", result.code, result.message)
+					case <-ctx.Done():
 						t.Fatal("repair write was not captured")
 					}
 					select {
 					case <-readerDone:
-					case <-time.After(5 * time.Second):
+					case <-ctx.Done():
 						t.Fatal("overlapping reconcile did not finish")
 					}
 					code, message = invoke()
@@ -657,7 +691,7 @@ func TestExplicitPublicationVerifiesPinnedReviewWithoutStartingCodex(t *testing.
 					select {
 					case result := <-writerDone:
 						code, message = result.code, result.message
-					case <-time.After(5 * time.Second):
+					case <-ctx.Done():
 						t.Fatal("original repair did not settle")
 					}
 				} else {

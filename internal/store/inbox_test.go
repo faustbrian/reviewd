@@ -83,7 +83,7 @@ func TestDiscoveryMigrationPreservesLegacyRunAndPublicationDecision(t *testing.T
 		t.Fatal(err)
 	}
 	// Reconstruct the predecessor schema in this task-owned temporary database.
-	if _, err := original.db.ExecContext(ctx, `DROP TABLE inbox_items; DROP TABLE observations; DROP TABLE follows; DROP TABLE discovery_scopes; PRAGMA user_version=1;`); err != nil {
+	if _, err := original.db.ExecContext(ctx, `DROP TABLE input_requests; DROP TABLE item_snoozes; DROP TABLE project_pauses; ALTER TABLE observations DROP COLUMN head_sha; DROP TABLE inbox_items; DROP TABLE observations; DROP TABLE follows; DROP TABLE discovery_scopes; PRAGMA user_version=1;`); err != nil {
 		t.Fatal(err)
 	}
 	if err := original.Close(); err != nil {

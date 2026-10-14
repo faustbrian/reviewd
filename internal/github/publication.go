@@ -197,7 +197,7 @@ func (c *Client) postPublication(ctx context.Context, path string, submission an
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusCreated {
-		return &HTTPError{Status: response.StatusCode}
+		return remoteHTTPError(response, time.Now())
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, 8*1024*1024+1))
 	if err != nil || len(data) > 8*1024*1024 || json.Unmarshal(data, target) != nil {

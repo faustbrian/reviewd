@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/faustbrian/reviewd/internal/lifetime"
 )
 
 // Hold the parent unreaped while a real metadata scan races its exit. Darwin
@@ -68,7 +70,7 @@ fi
 	t.Setenv("REVIEWD_TEST_SCAN_MARKER", marker)
 	t.Setenv("REVIEWD_TEST_POST_SCAN", gate)
 	t.Setenv("REVIEWD_TEST_CAPTURE", filepath.Join(root, "metadata"))
-	parent, reaped, finish := make(chan error, 1), make(chan struct{}), make(chan struct{})
+	parent, observed, finish := make(chan error, 1), make(chan struct{}), make(chan struct{})
 	reapReady, releaseReap := make(chan struct{}), make(chan struct{})
 	go func() {
 		for {
@@ -87,10 +89,10 @@ fi
 		case <-releaseReap:
 		case <-finish:
 		}
-		parent <- command.Wait()
-		close(reaped)
+		parent <- lifetime.WaitExited(command.Process.Pid)
+		close(observed)
 	}()
-	defer func() { _ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL); close(finish); <-reaped }()
+	defer func() { close(finish); <-observed }()
 	r := &Runtime{command: command, isolation: isolation, wait: make(chan error, 1), stop: make(chan struct{})}
 	go func() { r.wait <- superviseProcess(command, parent, r.stop) }()
 	closed := make(chan error, 1)
@@ -111,6 +113,8 @@ fi
 		if _, err := os.Stat(private); err != nil {
 			t.Fatal("private state removed before parent completion")
 		}
+		close(releaseReap)
+	} else {
 		close(releaseReap)
 	}
 	var closeErr error

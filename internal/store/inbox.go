@@ -20,64 +20,44 @@ type DiscoveryScope struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 type Observation struct {
-	PullID int64           `json:"pull_id"`
-	Number int             `json:"number"`
-	Record json.RawMessage `json:"record"`
+	// MaterialChange is classified from the complete old/current acquisition,
+	// including title/body changes that may accompany a review re-request.
+	MaterialChange bool            `json:"-"`
+	PullID         int64           `json:"pull_id"`
+	Number         int             `json:"number"`
+	HeadSHA        string          `json:"head_sha,omitempty"`
+	Record         json.RawMessage `json:"record"`
 }
 type InboxItem struct {
-	ID            string    `json:"id"`
-	Repository    string    `json:"repository"`
-	PullID        int64     `json:"pull_id"`
-	Number        int       `json:"number"`
-	ActorID       int64     `json:"actor_id"`
-	Category      string    `json:"category"`
-	Trigger       string    `json:"trigger"`
-	State         string    `json:"state"`
-	Baseline      bool      `json:"baseline"`
-	EventKey      string    `json:"event_key"`
-	HeadSHA       string    `json:"head_sha"`
-	TargetBaseSHA string    `json:"target_base_sha"`
-	ContextKey    string    `json:"context_key"`
-	Title         string    `json:"title"`
-	URL           string    `json:"url"`
-	Action        string    `json:"action"`
-	Explanation   string    `json:"explanation"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID            string         `json:"id"`
+	RunID         string         `json:"run_id,omitempty"`
+	DecisionID    string         `json:"decision_id,omitempty"`
+	Manual        bool           `json:"manual,omitempty"`
+	ReviewNow     bool           `json:"review_now,omitempty"`
+	Overrides     map[string]any `json:"overrides,omitempty"`
+	Attempts      int            `json:"attempts,omitempty"`
+	RetryAt       time.Time      `json:"retry_at,omitempty"`
+	Failure       string         `json:"failure,omitempty"`
+	Repository    string         `json:"repository"`
+	PullID        int64          `json:"pull_id"`
+	Number        int            `json:"number"`
+	ActorID       int64          `json:"actor_id"`
+	Category      string         `json:"category"`
+	Trigger       string         `json:"trigger"`
+	State         string         `json:"state"`
+	Baseline      bool           `json:"baseline"`
+	EventKey      string         `json:"event_key"`
+	HeadSHA       string         `json:"head_sha"`
+	TargetBaseSHA string         `json:"target_base_sha"`
+	ContextKey    string         `json:"context_key"`
+	Title         string         `json:"title"`
+	URL           string         `json:"url"`
+	Action        string         `json:"action"`
+	Explanation   string         `json:"explanation"`
+	UpdatedAt     time.Time      `json:"updated_at"`
 }
 
 var ErrDiscoveryChanged = errors.New("another synchronization changed this repository; retry its current observation")
-
-func (s *Store) migrateDiscovery(ctx context.Context) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS discovery_scopes (
- repository TEXT PRIMARY KEY, revision INTEGER NOT NULL, actor_id INTEGER NOT NULL,
- record TEXT NOT NULL CHECK(json_valid(record))
-);
-CREATE TABLE IF NOT EXISTS observations (
- repository TEXT NOT NULL, actor_id INTEGER NOT NULL, pull_id INTEGER NOT NULL,
- number INTEGER NOT NULL, record TEXT NOT NULL CHECK(json_valid(record)),
- PRIMARY KEY(repository,actor_id,pull_id)
-);
-CREATE TABLE IF NOT EXISTS inbox_items (
- id TEXT PRIMARY KEY, repository TEXT NOT NULL, actor_id INTEGER NOT NULL,
- pull_id INTEGER NOT NULL, category TEXT NOT NULL, record TEXT NOT NULL CHECK(json_valid(record)),
- UNIQUE(repository,actor_id,pull_id,category)
-);
-CREATE TABLE IF NOT EXISTS follows (
- repository TEXT NOT NULL, actor_id INTEGER NOT NULL, pull_id INTEGER NOT NULL,
- number INTEGER NOT NULL, following INTEGER NOT NULL CHECK(following IN (0,1)), ignored_requests TEXT NOT NULL CHECK(json_valid(ignored_requests)),
- PRIMARY KEY(repository,actor_id,pull_id)
-);
-PRAGMA user_version=2;`)
-	if err != nil {
-		return errors.New("cannot migrate durable discovery state")
-	}
-	return tx.Commit()
-}
 
 // ConfigureDiscovery reconciles the complete allowlist and captures acquisition
 // revisions in one transaction, before authentication or any other external I/O.
@@ -149,7 +129,7 @@ func (s *Store) DiscoveryScope(ctx context.Context, repository string) (Discover
 	return scope, nil
 }
 func (s *Store) Observations(ctx context.Context, repository string, actor int64) (map[int64]Observation, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT pull_id,number,record FROM observations WHERE repository=? AND actor_id=?", repository, actor)
+	rows, err := s.db.QueryContext(ctx, "SELECT pull_id,number,head_sha,record FROM observations WHERE repository=? AND actor_id=?", repository, actor)
 	if err != nil {
 		return nil, err
 	}
@@ -158,11 +138,11 @@ func (s *Store) Observations(ctx context.Context, repository string, actor int64
 	for rows.Next() {
 		var id int64
 		var number int
-		var raw string
-		if err := rows.Scan(&id, &number, &raw); err != nil {
+		var raw, head string
+		if err := rows.Scan(&id, &number, &head, &raw); err != nil {
 			return nil, err
 		}
-		result[id] = Observation{PullID: id, Number: number, Record: json.RawMessage(raw)}
+		result[id] = Observation{PullID: id, Number: number, HeadSHA: head, Record: json.RawMessage(raw)}
 	}
 	return result, rows.Err()
 }
@@ -195,11 +175,22 @@ func (s *Store) ApplyDiscovery(ctx context.Context, observed DiscoveryScope, nex
 		return ErrDiscoveryChanged
 	}
 	for _, row := range rows {
+		if row.MaterialChange {
+			if err := supersedeItemRuns(ctx, tx, next.Repository, next.ActorID, row.PullID); err != nil {
+				return err
+			}
+		}
+		if row.HeadSHA != "" {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM item_snoozes WHERE head_sha!='' AND head_sha!=? AND item_id IN
+   (SELECT id FROM inbox_items WHERE repository=? AND actor_id=? AND pull_id=?)`, row.HeadSHA, next.Repository, next.ActorID, row.PullID); err != nil {
+				return err
+			}
+		}
 		if row.PullID <= 0 || row.Number <= 0 || !json.Valid(row.Record) {
 			return errors.New("invalid discovery observation")
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO observations(repository,actor_id,pull_id,number,record) VALUES(?,?,?,?,?)
-  ON CONFLICT(repository,actor_id,pull_id) DO UPDATE SET number=excluded.number,record=excluded.record`, next.Repository, next.ActorID, row.PullID, row.Number, string(row.Record)); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO observations(repository,actor_id,pull_id,number,head_sha,record) VALUES(?,?,?,?,?,?)
+  ON CONFLICT(repository,actor_id,pull_id) DO UPDATE SET number=excluded.number,head_sha=excluded.head_sha,record=excluded.record`, next.Repository, next.ActorID, row.PullID, row.Number, row.HeadSHA, string(row.Record)); err != nil {
 			return err
 		}
 	}
@@ -264,7 +255,46 @@ func (s *Store) ApplyDiscovery(ctx context.Context, observed DiscoveryScope, nex
 				return errors.New("invalid stored inbox item")
 			}
 			item.ID = old.ID
-			if old.EventKey == item.EventKey && old.Action == item.Action && old.Trigger == item.Trigger {
+			if old.EventKey == item.EventKey {
+				item.RunID = old.RunID
+				item.DecisionID, item.Manual, item.ReviewNow = old.DecisionID, old.Manual, old.ReviewNow
+				item.Overrides = old.Overrides
+				if old.RunID != "" || old.Manual || (old.Action == "auto" && item.Action == "auto") {
+					item.Baseline = old.Baseline
+				}
+				item.Attempts, item.RetryAt, item.Failure = old.Attempts, old.RetryAt, old.Failure
+				// Discovery owns current policy and eligibility; it does not replace
+				// a frozen run or revoke an unchanged explicit private decision.
+				eligible := item.State != "ignored" && item.State != "ineligible" && item.State != "closed" && item.State != "following"
+				if eligible && old.RunID != "" {
+					var state State
+					if err := tx.QueryRowContext(ctx, "SELECT state FROM runs WHERE id=? AND repository=? AND actor_id=? AND pull_id=?", old.RunID, item.Repository, item.ActorID, item.PullID).Scan(&state); err != nil {
+						return errors.New("linked review run is unavailable; preserve its durable state")
+					}
+					item.State = string(state)
+					if state == Queued {
+						item.State = "reviewing"
+					}
+					if state == WaitingChecks && old.Attempts > 0 {
+						item.State = "retry_wait"
+						if old.Attempts >= 3 {
+							item.State = "failed"
+						}
+					}
+					if state == Prepared && old.Attempts >= 3 {
+						item.State = "failed"
+					}
+				} else if eligible && (old.Manual || (item.Action == "auto" && !item.Baseline)) {
+					item.State = "queued"
+				}
+				if eligible && old.RunID == "" && (old.Manual || item.Action == "auto") && old.Attempts > 0 {
+					item.State = "retry_wait"
+					if old.Attempts >= 3 {
+						item.State = "failed"
+					}
+				}
+			}
+			if old.EventKey == item.EventKey && old.Action == item.Action && old.Trigger == item.Trigger && old.State == item.State {
 				continue
 			}
 			if old.EventKey == item.EventKey && old.State == "skipped" {
@@ -380,6 +410,116 @@ func (s *Store) DiscoveryItems(ctx context.Context, repository string, actor int
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+// FinishItem projects the linked run's actual state, without replacing a newer
+// event or overriding an operator exclusion that arrived during execution.
+func (s *Store) FinishItem(ctx context.Context, item InboxItem, run Run) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE inbox_items SET record=json_set(record,'$.state',?,'$.run_id',?,'$.updated_at',?)
+ WHERE id=? AND json_extract(record,'$.event_key')=? AND json_extract(record,'$.run_id')=?
+ AND json_extract(record,'$.state') NOT IN ('ignored','skipped','closed','ineligible')`, string(run.State), run.ID, time.Now().UTC().Format(time.RFC3339Nano), item.ID, item.EventKey, run.ID)
+	if err != nil {
+		return err
+	}
+	_, err = result.RowsAffected()
+	return err
+}
+
+// ClaimWaitingItem revalidates local event eligibility and resumes the existing
+// frozen run in one transaction. A competing process cannot start its model.
+func (s *Store) ClaimWaitingItem(ctx context.Context, run Run, item InboxItem) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	if hold, err := held(ctx, tx, item, time.Now()); err != nil {
+		return false, err
+	} else if hold {
+		return false, ErrHeld
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE runs SET state='reviewing',record=json_set(record,'$.owner_id',?,'$.owner_closed',json('false')),updated_at=? WHERE id=? AND state='waiting_checks'
+ AND EXISTS(SELECT 1 FROM inbox_items i JOIN discovery_scopes s ON i.repository=s.repository AND i.actor_id=s.actor_id
+ WHERE i.id=? AND i.actor_id=? AND json_extract(s.record,'$.state')='ok'
+ AND json_extract(i.record,'$.event_key')=? AND COALESCE(json_extract(i.record,'$.decision_id'),'')=?
+	 AND json_extract(i.record,'$.run_id')=runs.id AND json_extract(i.record,'$.state') IN ('waiting_checks','retry_wait'))`, run.OwnerID, timestamp(), run.ID, item.ID, item.ActorID, item.EventKey, item.DecisionID)
+	if err != nil {
+		return false, err
+	}
+	count, err := result.RowsAffected()
+	if err != nil || count == 0 {
+		return false, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE inbox_items SET record=json_set(record,'$.state','reviewing') WHERE id=?`, item.ID); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
+}
+
+// DecideItem records an explicit choice against the current immutable event.
+// A decision does not authorize a later revision or grant publication rights.
+func (s *Store) DecideItem(ctx context.Context, id string, start, now bool, overrides map[string]any, expectedEvent ...string) (InboxItem, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return InboxItem{}, err
+	}
+	defer tx.Rollback()
+	var raw string
+	err = tx.QueryRowContext(ctx, `SELECT i.record FROM inbox_items i JOIN discovery_scopes d ON d.repository=i.repository AND d.actor_id=i.actor_id
+ WHERE i.id=? AND json_extract(d.record,'$.state')='ok'`, id).Scan(&raw)
+	var item InboxItem
+	if err != nil || json.Unmarshal([]byte(raw), &item) != nil {
+		return item, errors.New("current review item is unavailable; synchronize before deciding")
+	}
+	if len(expectedEvent) > 1 || (len(expectedEvent) == 1 && item.EventKey != expectedEvent[0]) {
+		return item, errors.New("displayed review event changed; inspect the current item before deciding")
+	}
+	if item.State == "closed" || item.State == "ineligible" || item.State == "reviewing" || item.State == "publishing" {
+		return item, errors.New("item is ineligible or already running; inspect its current run")
+	}
+	if item.RunID != "" {
+		var state State
+		if err := tx.QueryRowContext(ctx, "SELECT state FROM runs WHERE id=? AND repository=? AND actor_id=? AND pull_id=?", item.RunID, item.Repository, item.ActorID, item.PullID).Scan(&state); err != nil {
+			return item, errors.New("linked review run is unavailable; inspect its durable state before deciding")
+		}
+		if state == Publishing {
+			return item, errors.New("publication is already in flight; inspect the run instead of revoking its claimed attempt")
+		}
+	}
+	item.UpdatedAt = time.Now().UTC()
+	if start {
+		decision, err := newID()
+		if err != nil {
+			return item, err
+		}
+		item.State = "queued"
+		item.DecisionID = decision
+		item.Manual = true
+		item.ReviewNow = now
+		item.Overrides = overrides
+		item.RunID = ""
+		item.Baseline = false
+		item.Attempts, item.Failure, item.RetryAt = 0, "", time.Time{}
+	} else {
+		item.State = "skipped"
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM item_snoozes WHERE item_id=?", id); err != nil {
+		return item, err
+	}
+	data, err := json.Marshal(item)
+	if err != nil {
+		return item, err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE inbox_items SET record=? WHERE id=?", string(data), id); err != nil {
+		return item, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE discovery_scopes SET revision=revision+1,record=json_set(record,'$.revision',revision+1) WHERE repository=?`, item.Repository); err != nil {
+		return item, err
+	}
+	if err = tx.Commit(); err != nil {
+		return item, err
+	}
+	return item, nil
 }
 
 func (s *Store) FollowStates(ctx context.Context, repository string, actor int64) (map[int64]FollowState, error) {

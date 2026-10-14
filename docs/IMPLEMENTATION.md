@@ -6,15 +6,30 @@ choices without changing its scope.
 Supported operating systems are macOS and Linux only, on amd64 and arm64.
 Windows support was explicitly removed by the operator on 2026-10-13.
 
-## Current delivery
+## Current implementation
 
 The private Codex protocol adapter, sealed evidence broker, setup, diagnostics
 and trusted configuration explanation are delivered. Manual private review
 preparation, complete immutable source/context capture, SQLite run persistence,
 exact previews and checks-only refresh without another source/model review are
 delivered at `b8a4fd46aa7165e66e5042f11bd2aebe1c5737db`. It is not the finished application:
-continuous polling, scheduling/recovery, notifications and the TUI remain
-outstanding. See [configuration and setup](CONFIGURATION.md) and
+the initial headless watcher now adds durable decisions, bounded retries,
+CI waiting/resumption, process-safe concurrency and notification grouping/digests.
+Project pause/resume and item snooze retain durable decisions and defer scheduled
+work, automatic publication and notifications; see [personal holds](CONTROLS.md).
+Run-scoped cancellation distinguishes a durable request from confirmed worker
+exit and rejects cancellation of prepared/publication outcomes; see
+[cancellation](CANCELLATION.md). Those watcher/notification/control changes follow
+the older `f73eab6` snapshot. The optional keyboard inbox and scoped browser opening
+are now wired to the same ordinary commands; see [terminal workflows](TERMINAL.md).
+Active primary thread/turn identity, coarse activity and reported usage now
+reach the durable record before worker completion; see [sessions](SESSIONS.md).
+Durable textual clarification and owner-aware private-resource recovery are
+also wired into the application; see
+[sessions](SESSIONS.md) and [recovery](RECOVERY.md). Full native crash,
+terminal/platform and live-publication acceptance remain outstanding.
+See [foreground watching](WATCHING.md),
+[configuration and setup](CONFIGURATION.md) and
 [private reviews](REVIEWS.md). Explicit publication, duplicate references,
 readback and partial repair are implemented with owned Git/HTTP journey checks;
 see [publication and recovery](PUBLICATION.md). Live publication is unverified.
@@ -50,7 +65,7 @@ future host tool or another Codex version.
 
 ## Product choices
 
-- The TUI is implemented as an optional attachment: users may choose ordinary
+- The TUI is an optional attachment: users may choose ordinary
   commands or headless mode. Optional does not mean omitting terminal acceptance.
 - Repository preferences come from the exact fetched PR target-base SHA and are
   frozen with the review. A changed controlling base requires reassessment.
@@ -71,7 +86,7 @@ For an explicitly authorized live Codex check, use
 `python3 scripts/check.py --live-codex`. This uses the existing Codex login and
 a task-owned fixture skill; it does not post a review. That fixture proves
 protocol/skill injection and bounded evidence access, not staff review quality
-or the application's not-yet-implemented publication contract.
+or live GitHub publication through the application's publication owner.
 
 Use `python3 scripts/check.py --codex-capabilities` for the installed-host
 capability check. Its synthetic API key only reaches an owned local fixture;
@@ -83,7 +98,7 @@ and exercises that fixture natively on each supported OS/architecture. Use
 No provider account is needed for that check. The SDK batch at
 `8ce17e56f9d20fd397588a26fb99f757bfa40e3f` passed all four native hosted jobs in
 [run 38396971620](https://github.com/faustbrian/reviewd/actions/runs/38396971620).
-Those results do not certify later uncommitted CLI changes.
+Those results do not certify later source revisions.
 
 Setup/configuration at `ab689855eb62a57e68741ab92b84279138f81c25` passed all four
 native hosted jobs in [run 38413412605](https://github.com/faustbrian/reviewd/actions/runs/38413412605).
@@ -121,5 +136,40 @@ remained available. This is private native composition with owned Git/HTTP—not
 live GitHub acquisition/publication or a specialist-subprocess acceptance.
 
 One-shot allowlisted discovery and a durable inbox are now wired through `sync`,
-`inbox`, `follow`, and `unfollow`; see [discovery](DISCOVERY.md). This does not
-claim completion of continuous scheduling, notifications, or terminal attachment.
+`inbox`, `follow`, and `unfollow`; see [discovery](DISCOVERY.md). The later local
+watcher, notifications and terminal attachment have separate verification and
+delivery boundaries; they are not included in the historical snapshots below.
+
+Immutable macOS/Linux amd64/arm64 distribution snapshots at `f73eab6` passed
+all four native quality and packaging jobs in
+[run 38503954299](https://github.com/faustbrian/reviewd/actions/runs/38503954299).
+All four downloaded archives were checked against that source revision and
+the macOS arm64 download passed version/help/completion smoke. These artifacts
+exclude the later local watcher/notification changes; see
+[distribution](DISTRIBUTION.md).
+
+Local private-session input now has ordinary `inputs`/`answer` commands,
+transactional exact-target selection, bounded asynchronous protocol waits,
+separate local/write/clear facts, generic notifications and an optional terminal
+editor. The actual selected model asked and consumed an independently supplied
+fixture answer through the default private CLI. These later changes are absent
+from the older `f73eab6` snapshot. Native Linux/desktop UX, actual-model hard-crash
+recovery and live GitHub publication acceptance remain outstanding.
+Native macOS PTY checks now cover answering, dismissal, interruption, stale
+prompts and terminal restoration without mouse reporting.
+
+Local private-history expiry now uses the configured retention period through
+`cleanup` and the foreground watcher. It preserves unresolved work, logical work
+keys, following and compact publication receipts; see [retention](RETENTION.md).
+Retention does not itself provide crash-left process/source/runtime recovery;
+the separate owner-aware recovery path handles that boundary.
+
+A later native watcher acceptance uses the actual installed review skill and
+actual `gpt-6.1-sol` account execution against an owned Git/HTTP fixture. It finds
+a seeded percentage-discount regression at the canonical changed line, retains
+the private preview and skill/session identities, and confirms owner-storage
+removal. This is separate from the controlled clarification skill and its
+unpredictable-answer oracle. No GitHub review is posted and no broad staff-review
+quality guarantee is inferred. The opt-in `TestLiveCodexWatcherUsesInstalledReviewSkill`
+requires both `REVIEWD_LIVE_CODEX=1` and `REVIEWD_LIVE_SKILL_PATH` naming the
+operator-authorized installed `SKILL.md`; ordinary offline checks skip it.

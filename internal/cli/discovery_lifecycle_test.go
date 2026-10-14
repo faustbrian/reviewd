@@ -16,6 +16,7 @@ import (
 
 	"github.com/faustbrian/reviewd/internal/codex"
 	"github.com/faustbrian/reviewd/internal/github"
+	"github.com/faustbrian/reviewd/internal/notify"
 	"github.com/faustbrian/reviewd/internal/review"
 )
 
@@ -41,7 +42,7 @@ func lifecycleCLIConfig(t *testing.T, action string, peer http.Handler) (func(st
 	return invoke, path
 }
 
-func lifecycleCLIConfigDeps(t *testing.T, action string, peer http.Handler) (func(string, ...string) lifecycleInbox, string, Dependencies) {
+func lifecycleCLIConfigDeps(t *testing.T, action string, peer http.Handler, allowReviewWrites ...bool) (func(string, ...string) lifecycleInbox, string, Dependencies) {
 	t.Helper()
 	root := t.TempDir()
 	path := filepath.Join(root, "config.toml")
@@ -50,7 +51,8 @@ func lifecycleCLIConfigDeps(t *testing.T, action string, peer http.Handler) (fun
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && !(r.Method == http.MethodPost && r.URL.Path == "/graphql") {
+		reviewWrite := len(allowReviewWrites) == 1 && allowReviewWrites[0] && r.Method == http.MethodPost && r.URL.Path == "/repos/owner/repo/pulls/1/reviews"
+		if r.Method != http.MethodGet && !(r.Method == http.MethodPost && r.URL.Path == "/graphql") && !reviewWrite {
 			t.Errorf("discovery attempted a write: %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(500)
 			return
@@ -62,7 +64,7 @@ func lifecycleCLIConfigDeps(t *testing.T, action string, peer http.Handler) (fun
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := Dependencies{GitHub: func(context.Context, string) (*github.Client, error) { return client, nil }, Review: func(context.Context, review.WorkerRequest) (codex.ReviewOutput, error) {
+	deps := Dependencies{Desktop: func(context.Context, notify.Message) error { return nil }, GitHub: func(context.Context, string) (*github.Client, error) { return client, nil }, Review: func(context.Context, review.WorkerRequest) (codex.ReviewOutput, error) {
 		t.Fatal("discovery started a reviewer")
 		return codex.ReviewOutput{}, nil
 	}}

@@ -54,6 +54,8 @@ type HTTPError struct {
 
 func (e *HTTPError) Error() string {
 	switch e.Status {
+	case http.StatusOK:
+		return "GitHub GraphQL rate limit reached; wait for the server retry interval"
 	case 401:
 		return "GitHub authentication failed; run gh auth login for the configured host"
 	case 403:
@@ -170,21 +172,7 @@ func (c *Client) readRequestWithHeaders(ctx context.Context, method, endpoint st
 		*headers = response.Header.Clone()
 	}
 	if response.StatusCode != http.StatusOK {
-		retry := time.Duration(0)
-		if seconds, err := strconv.ParseUint(response.Header.Get("Retry-After"), 10, 64); err == nil && seconds > 0 {
-			maximum := time.Duration(1<<63 - 1)
-			if seconds > uint64(maximum/time.Second) {
-				retry = maximum
-			} else {
-				retry = time.Duration(seconds) * time.Second
-			}
-		} else if deadline, err := http.ParseTime(response.Header.Get("Retry-After")); err == nil {
-			retry = time.Until(deadline)
-			if retry < 0 {
-				retry = 0
-			}
-		}
-		return &HTTPError{Status: response.StatusCode, RetryAfter: retry, RateLimitRemaining: response.Header.Get("X-RateLimit-Remaining")}
+		return remoteHTTPError(response, time.Now())
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, 8*1024*1024+1))
 	if err != nil {
@@ -198,6 +186,100 @@ func (c *Client) readRequestWithHeaders(ctx context.Context, method, endpoint st
 	}
 	return nil
 }
+
+// remoteHTTPError preserves the same server guidance for reads and writes.
+func remoteHTTPError(response *http.Response, now time.Time) *HTTPError {
+	retry := time.Duration(0)
+	if seconds, err := strconv.ParseUint(response.Header.Get("Retry-After"), 10, 64); err == nil && seconds > 0 {
+		maximum := time.Duration(1<<63 - 1)
+		if seconds > uint64(maximum/time.Second) {
+			retry = maximum
+		} else {
+			retry = time.Duration(seconds) * time.Second
+		}
+	} else if deadline, err := http.ParseTime(response.Header.Get("Retry-After")); err == nil {
+		retry = deadline.Sub(now)
+		if retry < 0 {
+			retry = 0
+		}
+	}
+	remaining := response.Header.Get("X-RateLimit-Remaining")
+	if remaining == "0" {
+		if seconds, err := strconv.ParseInt(response.Header.Get("X-RateLimit-Reset"), 10, 64); err == nil && seconds > 0 {
+			if delay := time.Unix(seconds, 0).Sub(now); delay > retry {
+				retry = delay
+			}
+		}
+	}
+	if retry <= 0 && (response.StatusCode == http.StatusTooManyRequests || (response.StatusCode == http.StatusForbidden && remaining == "0")) {
+		retry = time.Minute
+	}
+	if retry <= 0 && response.StatusCode == http.StatusForbidden && response.Body != nil {
+		// Secondary limits may omit retry headers. Inspect only the bounded
+		// classification message; never retain or print the remote error body.
+		data, _ := io.ReadAll(io.LimitReader(response.Body, 64*1024))
+		var failure struct {
+			Message string            `json:"message"`
+			Errors  []json.RawMessage `json:"errors"`
+		}
+		if json.Unmarshal(data, &failure) == nil && (rateLimitMessage(failure.Message) || rateLimitErrors(failure.Errors)) {
+			retry = time.Minute
+		}
+	}
+	return &HTTPError{Status: response.StatusCode, RetryAfter: retry, RateLimitRemaining: remaining}
+}
+
+func rateLimitMessage(message string) bool {
+	message = strings.ToLower(message)
+	return strings.Contains(message, "secondary rate limit") || strings.Contains(message, "api rate limit exceeded")
+}
+
+func rateLimitErrors(failures []json.RawMessage) bool {
+	for _, raw := range failures {
+		var failure struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(raw, &failure) == nil && (failure.Type == "RATE_LIMITED" || rateLimitMessage(failure.Message)) {
+			return true
+		}
+	}
+	return false
+}
+
+// readInterruption keeps retry constraints out of unavailable-evidence prose.
+// Permanent access gaps may remain review evidence; throttling must stop reads.
+func readInterruption(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	var remote *HTTPError
+	if errors.As(err, &remote) && (remote.Status == http.StatusTooManyRequests || remote.RetryAfter > 0) {
+		return err
+	}
+	return nil
+}
+
+// RetryAfter returns the longest server constraint across repository errors.
+func RetryAfter(err error) time.Duration {
+	var delay time.Duration
+	pending := []error{err}
+	for len(pending) > 0 {
+		current := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if limited, ok := current.(*HTTPError); ok && limited.RetryAfter > delay {
+			delay = limited.RetryAfter
+		}
+		switch wrapped := current.(type) {
+		case interface{ Unwrap() []error }:
+			pending = append(pending, wrapped.Unwrap()...)
+		case interface{ Unwrap() error }:
+			pending = append(pending, wrapped.Unwrap())
+		}
+	}
+	return delay
+}
+
 func (c *Client) Identity(ctx context.Context) (Identity, error) {
 	var identity Identity
 	if err := c.get(ctx, "user", &identity); err != nil {

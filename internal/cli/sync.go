@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/faustbrian/reviewd/internal/config"
 	"github.com/faustbrian/reviewd/internal/discovery"
@@ -56,8 +57,16 @@ func (e *execution) presentInbox(ctx context.Context, output io.Writer, durable 
 	if err != nil {
 		return failure(1, err.Error())
 	}
+	controls, err := durable.Controls(ctx, time.Now())
+	if err != nil {
+		return failure(1, err.Error())
+	}
+	cooldowns, err := durable.GitHubCooldowns(ctx, time.Now())
+	if err != nil {
+		return failure(1, err.Error())
+	}
 	if e.json {
-		value := map[string]any{"schema_version": 1, "runs": runs, "items": items, "discovery": scopes}
+		value := map[string]any{"schema_version": 1, "runs": runs, "items": items, "discovery": scopes, "controls": controls, "github_cooldowns": cooldowns}
 		data, err := json.Marshal(value)
 		if err != nil {
 			return err
@@ -75,6 +84,9 @@ func (e *execution) presentInbox(ctx context.Context, output io.Writer, durable 
 	}
 	failed := false
 	pending := false
+	for _, cooldown := range cooldowns {
+		fmt.Fprintf(output, "Automatic GitHub work for %q waits until %s (server retry guidance).\n", cooldown.Host, cooldown.Until.Format(time.RFC3339))
+	}
 	for _, scope := range scopes {
 		if scope.State == "failed" {
 			failed = true
@@ -85,11 +97,24 @@ func (e *execution) presentInbox(ctx context.Context, output io.Writer, durable 
 			fmt.Fprintf(output, "Discovery has not completed for %q.\n", redact(scope.Repository))
 		}
 	}
+	for _, repository := range controls.PausedProjects {
+		fmt.Fprintf(output, "Paused project: %q\n", redact(repository))
+	}
+	for _, snooze := range controls.Snoozes {
+		reason := "until new commits"
+		if !snooze.Until.IsZero() {
+			reason = "until " + snooze.Until.Format(time.RFC3339)
+		}
+		fmt.Fprintf(output, "Snoozed item: %s %s\n", snooze.ItemID, reason)
+	}
 	for _, item := range items {
 		fmt.Fprintf(output, "%s  %s  %q #%d  %s\n  %s\n", item.ID, item.Category, redact(item.Repository), item.Number, item.State, terminalText(item.Explanation))
 	}
 	for _, run := range runs {
 		fmt.Fprintf(output, "%s  %q #%d  %s\n", run.ID, redact(run.Repository), run.Number, run.State)
+		if run.CancellationRequested && run.State != store.Cancelled {
+			fmt.Fprintln(output, "  Cancellation requested; waiting for the private worker to stop.")
+		}
 	}
 	if len(items) == 0 && len(runs) == 0 {
 		if failed {

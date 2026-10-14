@@ -34,7 +34,14 @@ func TestLiveCodexReadOnlyEvidenceAndCancellation(t *testing.T) {
 		}
 	})
 	fixtureRead := false
-	result, err := runtime.Review(ctx, ReviewRequest{Model: "gpt-6.1-sol", Effort: "high", SkillName: "reviewd-integration-fixture", SkillPath: skill, Prompt: "Read the fixture evidence document and report its value. Report whether a shell tool is available.", Evidence: NewEvidenceBroker(nil, map[string]string{"fixture": "value=reviewd_live_read_only_483"}), OnProgress: func(message Message) {
+	var liveStatuses []ReviewOutput
+	result, err := runtime.Review(ctx, ReviewRequest{Model: "gpt-6.1-sol", Effort: "high", SkillName: "reviewd-integration-fixture", SkillPath: skill, Prompt: "Read the fixture evidence document and report its value. Report whether a shell tool is available.", Evidence: NewEvidenceBroker(nil, map[string]string{"fixture": "value=reviewd_live_read_only_483"}), OnStatus: func(status ReviewOutput) error {
+		liveStatuses = append(liveStatuses, status)
+		if status.Text != "" {
+			t.Error("actual Codex status exposed model answer text")
+		}
+		return nil
+	}, OnProgress: func(message Message) {
 		if message.Method != "item/tool/call" {
 			return
 		}
@@ -61,6 +68,18 @@ func TestLiveCodexReadOnlyEvidenceAndCancellation(t *testing.T) {
 	}
 	if result.EffectiveModel != "gpt-6.1-sol" || result.ThreadID == "" || result.TurnID == "" {
 		t.Fatalf("live identity/model missing: %+v", result)
+	}
+	if len(liveStatuses) < 3 || liveStatuses[0].ThreadID != result.ThreadID || liveStatuses[0].TurnID != "" || liveStatuses[len(liveStatuses)-1].Progress != "finished" {
+		t.Fatal("actual Codex did not expose thread identity before turn creation and final status")
+	}
+	activeTurnReported := false
+	for _, status := range liveStatuses[:len(liveStatuses)-1] {
+		if status.ThreadID == result.ThreadID && status.TurnID == result.TurnID && status.Progress != "finished" {
+			activeTurnReported = true
+		}
+	}
+	if !activeTurnReported {
+		t.Fatal("actual Codex turn was only reported retrospectively")
 	}
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)

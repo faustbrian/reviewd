@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -233,5 +234,22 @@ func TestGlobalDefaultsDoNotSelectAnArbitraryProject(t *testing.T) {
 	}
 	if defaults.Repository != "" || defaults.String("actions.publish_review") != "ask" {
 		t.Fatal("profile diagnostics inherited an arbitrary project's automation")
+	}
+}
+
+func TestQuietHoursRejectEquivalentEndpointsBeforePolicyCanBecomeActive(t *testing.T) {
+	for _, row := range []struct{ start, end, field string }{
+		{"7:00", "07:00", "notifications.quiet_end"},
+		{"07:00", "7:00", "notifications.quiet_end"},
+	} {
+		for _, section := range []string{"notifications", `projects."owner/repo".notifications`} {
+			document, err := Parse([]byte("schema_version=1\n["+section+"]\nquiet_start="+strconv.Quote(row.start)+"\nquiet_end="+strconv.Quote(row.end)+"\n"), "fixture")
+			if err == nil || document != nil || !strings.Contains(err.Error(), row.field) {
+				t.Errorf("%s %s-%s activated zero-length quiet hours: document=%t err=%v", section, row.start, row.end, document != nil, err)
+			}
+		}
+	}
+	if _, err := Resolve(nil, "owner/repo", nil, map[string]any{"notifications.quiet_start": "7:00", "notifications.quiet_end": "07:00"}); err == nil {
+		t.Fatal("command-line snapshot activated zero-length quiet hours")
 	}
 }
