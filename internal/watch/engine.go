@@ -3,6 +3,7 @@ package watch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
@@ -63,6 +64,9 @@ func (e *Engine) Tick(ctx context.Context) (resultErr error) {
 	if err != nil {
 		return err
 	}
+	if err := e.revokeExcludedReviews(ctx, document); err != nil {
+		return err
+	}
 	host := defaults.String("github.host")
 	if held, err := e.cooling(ctx, host); held || err != nil {
 		return err
@@ -97,7 +101,7 @@ func (e *Engine) Tick(ctx context.Context) (resultErr error) {
 	for id, work := range e.active {
 		item, exists := current[id]
 		scope, allowed := eligible[work.item.Repository]
-		if !exists || !allowed || scope.ActorID != work.item.ActorID || item.EventKey != work.item.EventKey {
+		if !exists || !allowed || scope.ActorID != work.item.ActorID || item.EventKey != work.item.EventKey || item.State == "ineligible" || item.State == "closed" {
 			work.cancel()
 		}
 	}
@@ -116,6 +120,43 @@ func (e *Engine) Tick(ctx context.Context) (resultErr error) {
 	return errors.Join(acquisition, e.Admit(ctx))
 }
 
+// Operator revocation is local authority and must not wait for GitHub: both a
+// durable cooldown and a newly throttled acquisition can return before the
+// ordinary event reconciliation below. Cached observations supply author facts
+// even for jobs started before the latest configuration was loaded.
+func (e *Engine) revokeExcludedReviews(ctx context.Context, document *config.Document) error {
+	for _, work := range e.active {
+		// Every current executor is a read-only reviewer, including legacy
+		// feedback-triggered review jobs. Inbox category is not capability.
+		policy, err := config.Resolve(document, work.item.Repository, nil, nil)
+		if err != nil {
+			work.cancel()
+			return err
+		}
+		if len(policy.Strings("reviewer.exclude_authors")) == 0 {
+			continue
+		}
+		observations, err := e.Store.Observations(ctx, work.item.Repository, work.item.ActorID)
+		if err != nil {
+			work.cancel()
+			return err
+		}
+		var record struct {
+			Pull github.Pull `json:"pull"`
+		}
+		if json.Unmarshal(observations[work.item.PullID].Record, &record) != nil || record.Pull.Author.ID <= 0 || record.Pull.Author.Login == "" {
+			// Without the captured author there is no basis to retain discovered
+			// execution authority under a policy that excludes authors.
+			work.cancel()
+			continue
+		}
+		if policy.ReviewAuthorExcluded(record.Pull.Author.ID, record.Pull.Author.Login, work.item.ActorID) {
+			work.cancel()
+		}
+	}
+	return nil
+}
+
 // Admit refills capacity from the current durable snapshot without polling
 // GitHub again or reprocessing an event already handled in this poll cycle.
 func (e *Engine) Admit(ctx context.Context) error {
@@ -123,6 +164,9 @@ func (e *Engine) Admit(ctx context.Context) error {
 		return nil
 	}
 	document := e.Configuration.Document()
+	if err := e.revokeExcludedReviews(ctx, document); err != nil {
+		return err
+	}
 	defaults, err := config.ResolveDefaults(document, nil)
 	if err != nil {
 		return err

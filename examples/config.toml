@@ -13,6 +13,7 @@ debounce = "30s"
 include_drafts = false
 
 [reviewer]
+exclude_authors = ["@me"]
 model = "gpt-6.1-sol"
 reasoning_effort = "high"
 skill = "requesting-code-review"

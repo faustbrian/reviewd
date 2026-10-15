@@ -59,10 +59,15 @@ type admissionFixture struct {
 	manager   *config.Manager
 	client    *github.Client
 	now       time.Time
+	author    github.Identity
 }
 
-func newAdmissionFixture(t *testing.T) *admissionFixture {
+func newAdmissionFixture(t *testing.T, authors ...github.Identity) *admissionFixture {
 	t.Helper()
+	author := github.Identity{ID: 42, Login: "author"}
+	if len(authors) == 1 {
+		author = authors[0]
+	}
 	directory := filepath.Join(t.TempDir(), "profile")
 	durable, err := store.Open(context.Background(), directory)
 	if err != nil {
@@ -86,7 +91,7 @@ func newAdmissionFixture(t *testing.T) *admissionFixture {
 				w.WriteHeader(500)
 				return
 			}
-			fmt.Fprintf(w, `{"id":%d,"number":%d,"state":"open","draft":false,"title":"Owned admission fixture","body":"","updated_at":"2026-10-14T00:00:00Z","user":{"id":42,"login":"author"},"base":{"sha":%q,"ref":"main","repo":{"id":99,"full_name":"owner/repo"}},"head":{"sha":%q,"ref":"feature"},"changed_files":1,"commits":1}`, 700+number, number, strings.Repeat("a", 40), strings.Repeat("b", 40))
+			fmt.Fprintf(w, `{"id":%d,"number":%d,"state":"open","draft":false,"title":"Owned admission fixture","body":"","updated_at":"2026-10-14T00:00:00Z","user":{"id":%d,"login":%q},"base":{"sha":%q,"ref":"main","repo":{"id":99,"full_name":"owner/repo"}},"head":{"sha":%q,"ref":"feature"},"changed_files":1,"commits":1}`, 700+number, number, author.ID, author.Login, strings.Repeat("a", 40), strings.Repeat("b", 40))
 		case r.URL.Path == "/repos/owner/repo/branches/main":
 			fmt.Fprint(w, `{"protected":false}`)
 		case r.URL.Path == "/repos/owner/repo/rules/branches/main":
@@ -105,10 +110,10 @@ func newAdmissionFixture(t *testing.T) *admissionFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &admissionFixture{durable: durable, directory: directory, manager: manager, client: client, now: time.Now().UTC()}
+	return &admissionFixture{durable: durable, directory: directory, manager: manager, client: client, now: time.Now().UTC(), author: author}
 }
 
-func (f *admissionFixture) add(t *testing.T, number int, trigger string, arrived time.Time) {
+func (f *admissionFixture) add(t *testing.T, number int, trigger string, arrived time.Time, categories ...string) {
 	t.Helper()
 	ctx := context.Background()
 	before, err := f.durable.DiscoveryScope(ctx, "github.com/owner/repo")
@@ -121,8 +126,13 @@ func (f *admissionFixture) add(t *testing.T, number int, trigger string, arrived
 	if err != nil {
 		t.Fatal(err)
 	}
-	items = append(items, store.InboxItem{Repository: before.Repository, ActorID: 43, PullID: int64(700 + number), Number: number, Category: "reviews_owed", Trigger: trigger, Action: "auto", State: "queued", EventKey: fmt.Sprintf("request-%d", number), HeadSHA: strings.Repeat("b", 40), TargetBaseSHA: strings.Repeat("a", 40)})
-	if err := f.durable.ApplyDiscovery(ctx, before, after, []store.Observation{{PullID: int64(700 + number), Number: number, Record: json.RawMessage(`{}`)}}, items); err != nil {
+	category := "reviews_owed"
+	if len(categories) == 1 {
+		category = categories[0]
+	}
+	items = append(items, store.InboxItem{Repository: before.Repository, ActorID: 43, PullID: int64(700 + number), Number: number, Category: category, Trigger: trigger, Action: "auto", State: "queued", EventKey: fmt.Sprintf("request-%d", number), HeadSHA: strings.Repeat("b", 40), TargetBaseSHA: strings.Repeat("a", 40)})
+	record, _ := json.Marshal(map[string]any{"pull": map[string]any{"author": f.author}})
+	if err := f.durable.ApplyDiscovery(ctx, before, after, []store.Observation{{PullID: int64(700 + number), Number: number, Record: record}}, items); err != nil {
 		t.Fatal(err)
 	}
 	// This owned fixture advances arrival time without sleeping. Store's real

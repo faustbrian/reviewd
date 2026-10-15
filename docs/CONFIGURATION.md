@@ -152,6 +152,7 @@ listed above are permitted; all other preferences are operator controlled.
 | `reviewer.model`, `reviewer.reasoning_effort` | `gpt-6.1-sol`, `high`; account-advertised pair required |
 | `reviewer.skill`, `reviewer.skill_path` | `requesting-code-review`; optional explicit SKILL.md |
 | `reviewer.executable`, `reviewer.auth_home` | `codex`; optional explicit auth donor directory |
+| `reviewer.exclude_authors` | `["@me"]`; exact case-insensitive logins or authenticated account identity |
 | `limits.max_concurrent_reviews` | 2; 1–16 |
 | `limits.review_timeout` | `30m`; 1m–24h |
 | `actions.new_pull_request` | `ignore` |
@@ -170,6 +171,25 @@ Exact-project settings may override watch debounce/drafts, reviewer
 model/effort/skill/path, review timeout, actions, notifications and instructions.
 GitHub identity/scope, polling interval, executable/auth donor, global
 concurrency and state settings belong to the global profile.
+
+Author exclusions apply to discovered reviews from direct or team requests,
+following, code/context changes, and optional new-PR discovery. `@me` uses the
+authenticated account ID, independently of `github.watch_own_prs`. They also
+stop automatic publication of previously prepared reviews after a policy change.
+Feedback monitoring is independent. An explicit `review <url> --private` can
+still deliberately review an excluded author's PR.
+
+Lists replace earlier layers. Use `exclude_authors = []` to opt out, or an exact
+project override to select different authors. Repository `.reviewd` files cannot
+change exclusions:
+
+```toml
+[reviewer]
+exclude_authors = ["@me", "dependabot[bot]"]
+
+[projects."shipitfi/api".reviewer]
+exclude_authors = ["@me", "dependabot[bot]", "another-author"]
+```
 
 ## Output and completion
 

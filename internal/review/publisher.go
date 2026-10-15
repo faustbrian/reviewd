@@ -85,6 +85,9 @@ func (p Publisher) publish(ctx context.Context, document *config.Document, id, e
 		return run, errors.New("configured GitHub host changed; start a review in the intended profile")
 	}
 	mode := policy.String("actions.publish_review")
+	if automatic && policy.ReviewAuthorExcluded(prepared.Boundary.Pull.Author.ID, prepared.Boundary.Pull.Author.Login, run.ActorID) {
+		return run, errors.New("current operator policy excludes this PR author from automatic reviews")
+	}
 	if mode == "never" || (automatic && (mode != "auto" || run.Private)) {
 		return run, errors.New("current operator policy keeps this review private")
 	}

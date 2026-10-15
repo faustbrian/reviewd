@@ -39,6 +39,9 @@ func syncBaselineFixture(t *testing.T, viaTeam, conditional, following, ownedPub
 	root := t.TempDir()
 	configuration := filepath.Join(root, "config.toml")
 	text := "schema_version = 1\n[github]\nrepositories = [\"owner/repo\"]\n[actions]\nreview_requested = \"auto\"\npublish_review = \"auto\"\nnew_pull_request = " + strconv.Quote(optionalAction) + "\n[state]\ndirectory = " + strconv.Quote(filepath.Join(root, "state")) + "\n"
+	if overlapping {
+		text += "\n[reviewer]\nexclude_authors=[]\n"
+	}
 	if err := os.WriteFile(configuration, []byte(text), 0600); err != nil {
 		t.Fatal(err)
 	}

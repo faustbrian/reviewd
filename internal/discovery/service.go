@@ -231,6 +231,10 @@ func (s Service) syncRepository(ctx context.Context, document *config.Document, 
 		current.Following = followState.Following
 		current.Owed = current.Owed || current.Following
 		current.Own = policy.Bool("github.watch_own_prs") && pull.Author.ID == actor.ID
+		excludedReview := policy.ReviewAuthorExcluded(pull.Author.ID, pull.Author.Login, actor.ID)
+		if excludedReview {
+			current.Owed = false
+		}
 		relevant := current.Eligible && (current.Owed || current.Own || policy.String("actions.new_pull_request") != "ignore")
 		var old captured
 		if previous[pull.ID].Record != nil && json.Unmarshal(previous[pull.ID].Record, &old) != nil {
@@ -371,7 +375,7 @@ func (s Service) syncRepository(ctx context.Context, document *config.Document, 
 				item.State = "following"
 			}
 			items = append(items, item)
-		} else if !current.Own && (!tracked || followState.Following) && policy.String("actions.new_pull_request") != "ignore" {
+		} else if !excludedReview && !current.Own && (!tracked || followState.Following) && policy.String("actions.new_pull_request") != "ignore" {
 			trigger, action := updateAction("new_pull_request", policy.String("actions.new_pull_request"))
 			items = append(items, makeItem("reviews_owed", trigger, action, workEvent))
 		}

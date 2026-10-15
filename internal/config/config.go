@@ -48,6 +48,7 @@ var definitions = map[string]definition{
 	"reviewer.skill_path":           {"", globalScope | projectScope | cliScope},
 	"reviewer.executable":           {"codex", globalScope | cliScope},
 	"reviewer.auth_home":            {"", globalScope | cliScope},
+	"reviewer.exclude_authors":      {[]string{"@me"}, globalScope | projectScope | cliScope},
 	"limits.max_concurrent_reviews": {int64(2), globalScope | cliScope},
 	"limits.review_timeout":         {"30m", globalScope | projectScope | cliScope},
 	"actions.new_pull_request":      {"ignore", globalScope | projectScope | cliScope},
@@ -108,6 +109,25 @@ func (s Snapshot) Duration(key string) time.Duration {
 	return value
 }
 
+// ReviewAuthorExcluded governs discovered review work, not explicit manual URL
+// reviews or the independent feedback lane. @me follows stable account identity.
+func (s Snapshot) ReviewAuthorExcluded(authorID int64, login string, actorID int64) bool {
+	authors := s.Strings("reviewer.exclude_authors")
+	if _, present := s.values["reviewer.exclude_authors"]; !present {
+		authors = []string{"@me"} // Historical snapshots retain their exact bytes.
+	}
+	for _, author := range authors {
+		if author == "@me" {
+			if actorID > 0 && authorID == actorID {
+				return true
+			}
+		} else if strings.EqualFold(author, login) {
+			return true
+		}
+	}
+	return false
+}
+
 type snapshotWire struct {
 	SchemaVersion int               `json:"schema_version"`
 	Repository    string            `json:"repository"`
@@ -132,7 +152,14 @@ func (s *Snapshot) UnmarshalJSON(data []byte) error {
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return errors.New("configuration snapshot contains trailing data")
 	}
-	if wire.SchemaVersion != 1 || len(wire.Values) != len(definitions) || len(wire.Provenance) != len(definitions) {
+	// The sole historical schema omits author exclusions. Preserve its encoded
+	// values/fingerprint so prepared review payloads do not change on restore.
+	_, hasAuthors := wire.Values["reviewer.exclude_authors"]
+	expected := len(definitions)
+	if !hasAuthors {
+		expected--
+	}
+	if wire.SchemaVersion != 1 || len(wire.Values) != expected || len(wire.Provenance) != expected {
 		return errors.New("configuration snapshot has an unsupported or incomplete schema")
 	}
 	identity, err := Repository("github.com", wire.Repository)
@@ -165,7 +192,12 @@ func (s *Snapshot) UnmarshalJSON(data []byte) error {
 			return errors.New("configuration snapshot provenance grants a disallowed setting")
 		}
 	}
-	if err := validate(values); err != nil {
+	validationValues := values
+	if !hasAuthors {
+		validationValues = cloneValues(values)
+		validationValues["reviewer.exclude_authors"] = []string{"@me"}
+	}
+	if err := validate(validationValues); err != nil {
 		return err
 	}
 	fingerprint, err := snapshotHash(wire.Repository, values)
@@ -447,6 +479,7 @@ var segmentPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
 var hostPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]*[a-z0-9]$`)
 var modelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
 var credentialPattern = regexp.MustCompile(`^(sk[-_]|gh[opusr]_|github_pat_)`)
+var authorPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\[bot\])?$`)
 
 func Repository(host, name string) (string, error) {
 	parts := strings.Split(name, "/")
@@ -484,6 +517,19 @@ func validate(values map[string]any) error {
 		canonical = append(canonical, identity)
 	}
 	values["github.repositories"] = canonical
+	authors := values["reviewer.exclude_authors"].([]string)
+	seenAuthors := map[string]bool{}
+	for index, author := range authors {
+		author = strings.ToLower(author)
+		if author != "@me" && !authorPattern.MatchString(author) {
+			return errors.New("reviewer.exclude_authors must contain exact GitHub logins or @me")
+		}
+		if seenAuthors[author] {
+			return errors.New("reviewer.exclude_authors contains a duplicate author")
+		}
+		seenAuthors[author] = true
+		authors[index] = author
+	}
 	for _, key := range []string{"actions.new_pull_request", "actions.review_requested", "actions.head_updated", "actions.review_submitted", "actions.review_comment_added"} {
 		if !oneOf(values[key].(string), "ignore", "notify", "ask", "auto") {
 			return fmt.Errorf("%s must be ignore, notify, ask or auto", key)

@@ -89,6 +89,7 @@ func (s Service) start(ctx context.Context, document *config.Document, ref githu
 	if err != nil {
 		return run, err
 	}
+	currentPolicy := defaults
 	var resumed *Boundary
 	if item != nil && item.RunID != "" {
 		run, err = s.Store.Get(ctx, item.RunID)
@@ -159,6 +160,9 @@ func (s Service) start(ctx context.Context, document *config.Document, ref githu
 	pull, err := s.GitHub.Pull(ctx, ref.Repository, ref.Number)
 	if err != nil {
 		return run, err
+	}
+	if item != nil && currentPolicy.ReviewAuthorExcluded(pull.Author.ID, pull.Author.Login, actor.ID) {
+		return run, errors.New("current operator policy excludes this PR author from discovered reviews; use an explicit manual URL review if intended")
 	}
 	if pull.State != "open" {
 		return run, errors.New("pull request is closed; no review was started")
