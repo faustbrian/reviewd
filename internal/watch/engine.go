@@ -316,13 +316,21 @@ func (e *Engine) Complete(ctx context.Context, block bool) (resultErr error) {
 		}
 	}()
 	if result.run.ID != "" {
-		result.err = errors.Join(result.err, e.Store.FinishItem(ctx, result.item, result.run))
+		// A consumed completion is no longer available to Close. Persist its
+		// factual local projection even if foreground shutdown has begun; this
+		// bounded context grants no further model or remote work.
+		projection, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		result.err = errors.Join(result.err, e.Store.FinishItem(projection, result.item, result.run))
+		cancel()
 	}
 	if errors.Is(result.err, store.ErrHeld) {
 		return nil
 	}
 	if result.err != nil || result.run.State != store.Prepared || e.closing {
 		return result.err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	document := e.Configuration.Document()
 	policy, err := config.Resolve(document, result.run.Repository, nil, nil)

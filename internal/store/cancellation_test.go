@@ -194,3 +194,29 @@ func TestCancellationAndPreparationHaveOneTransactionalWinner(t *testing.T) {
 		}
 	}
 }
+
+func TestQueuedCancellationPreservesExcludedInboxState(t *testing.T) {
+	for _, state := range []string{"ignored", "skipped", "closed", "ineligible"} {
+		t.Run(state, func(t *testing.T) {
+			s, item := schedulingFixture(t)
+			ctx := context.Background()
+			run, _, err := s.CreateForItem(ctx, Run{Repository: item.Repository, RepositoryID: 99, PullID: item.PullID, Number: item.Number, ActorID: item.ActorID, ActorLogin: "reviewer", WorkKey: "excluded-cancellation", State: Queued, Configuration: json.RawMessage(`{}`)}, item)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The authoritative policy projection can exclude linked queued work before
+			// its owner receives a cancellation request.
+			if _, err := s.db.ExecContext(ctx, `UPDATE inbox_items SET record=json_set(record,'$.state',?) WHERE id=?`, state, item.ID); err != nil {
+				t.Fatal(err)
+			}
+			current, err := s.RequestCancellation(ctx, run.ID)
+			if err != nil || current.State != Cancelled {
+				t.Fatalf("cancellation failed: %+v %v", current, err)
+			}
+			items, err := s.DiscoveryItems(ctx, item.Repository, item.ActorID)
+			if err != nil || len(items) != 1 || items[0].State != state || items[0].RunID != run.ID {
+				t.Fatalf("cancellation overrode current exclusion: %+v %v", items, err)
+			}
+		})
+	}
+}

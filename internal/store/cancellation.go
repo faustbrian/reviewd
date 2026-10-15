@@ -33,7 +33,8 @@ func (s *Store) RequestCancellation(ctx context.Context, id string) (Run, error)
 		return Run{}, errors.New("run is " + string(current.State) + "; only queued, waiting or reviewing runs can be cancelled; inspect its existing result with reviewd show")
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE inbox_items SET record=json_set(record,'$.state','cancelled','$.updated_at',?)
- WHERE json_extract(record,'$.run_id')=? AND EXISTS(SELECT 1 FROM runs WHERE id=? AND state='cancelled')`, timestamp(), id, id); err != nil {
+ WHERE json_extract(record,'$.run_id')=? AND json_extract(record,'$.state') NOT IN ('ignored','skipped','closed','ineligible')
+ AND EXISTS(SELECT 1 FROM runs WHERE id=? AND state='cancelled')`, timestamp(), id, id); err != nil {
 		return Run{}, err
 	}
 	run, err := readRun(tx.QueryRowContext(ctx, selectRun+" WHERE id=?", id))
