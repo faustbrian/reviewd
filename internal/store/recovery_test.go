@@ -322,7 +322,17 @@ func TestRecoveryBoundedPassEventuallyReachesOwnersBehindLiveWork(t *testing.T) 
 	if err := orphan.lease.Close(); err != nil {
 		t.Fatal(err)
 	}
+	// Bind this partition to known older live owners. Wall-clock timestamps
+	// and random IDs must not accidentally place the orphan in the first batch.
+	if _, err := s.db.ExecContext(ctx, `UPDATE private_owners SET created_at=CASE WHEN id=? THEN '2001-01-01T00:00:00Z' ELSE '2000-01-01T00:00:00Z' END`, orphan.ID); err != nil {
+		t.Fatal(err)
+	}
 	first, err := s.RecoverPrivate(ctx, false)
+	for _, observed := range first.Owners {
+		if observed.ID == orphan.ID {
+			t.Fatal("deliberately later orphan entered the older live-owner batch")
+		}
+	}
 	if err != nil || !first.BatchFull || len(first.Owners) != RecoveryBatchLimit {
 		t.Fatalf("first bounded pass: %+v %v", first, err)
 	}

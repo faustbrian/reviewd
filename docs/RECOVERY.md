@@ -84,6 +84,29 @@ disconnected; the selected container-backed macOS command backend is not yet
 implemented. These Linux changes do not certify macOS feedback-command shutdown or
 change the read-only reviewer's capabilities and context lifetime.
 
+### Daemon-owned container resources
+
+The existing private owner can also reserve a tagged Docker container resource
+before creation. Binding its immutable container ID requires a matching daemon,
+application-generated name and owner/resource labels. It cannot be rebound to
+another container. Native process entries and container entries share the same
+bounded resource inventory and closing barrier; there is no second lease or
+effect journal. Older clients cannot decode tagged entries and retain storage.
+
+Container inspection uses a local Unix socket and Docker Engine API 1.44, only
+when the daemon advertises that API and a supported Linux architecture. Remote
+endpoints, redirects and proxy-environment routing are not used. A known ID is
+absent only after a canonical not-found response bracketed by matching daemon
+identity checks. Missing metadata, a replaced daemon and an unbound create
+intent remain uncertain. A still-present container, even if exited, does not
+authorize deletion of private storage. Recovery does not start, stop, remove or
+replay a container operation.
+
+This is ownership/control-plane support, not a connected macOS executor. It
+does not create containers, select toolchain images, run checkout commands or
+establish container isolation. The modifying workflow remains unavailable until
+command execution and its required lifecycle/delivery boundaries are connected.
+
 ## Classification
 
 | Report state | Meaning and effect |

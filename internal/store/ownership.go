@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/faustbrian/reviewd/internal/containerapi"
 	"github.com/faustbrian/reviewd/internal/lease"
 	"github.com/faustbrian/reviewd/internal/lifetime"
 )
@@ -148,34 +149,73 @@ func (p *privateProcess) Finished(ctx context.Context) error {
 	return changed(result, err, "cannot close private process ownership")
 }
 
-func decodeProcesses(raw string) (map[string]int, error) {
-	var processes map[string]int
-	if len(raw) > 1<<20 || json.Unmarshal([]byte(raw), &processes) != nil || processes == nil || len(processes) > 16 {
-		return nil, errors.New("invalid private process ownership; resources retained")
-	}
-	for id, group := range processes {
-		if !ownerIDPattern.MatchString(id) || group < 0 {
-			return nil, errors.New("invalid private process identity; resources retained")
-		}
-	}
-	return processes, nil
+// Native process groups and daemon-owned containers share the existing owner
+// and closing barrier. Legacy integer entries retain their exact interpretation.
+// Older clients reject the tagged container value and conservatively retain it.
+type ownedResources struct {
+	groups     map[string]int
+	containers map[string]containerapi.Resource
+}
+type ownedContainer struct {
+	Kind     string                `json:"kind"`
+	Resource containerapi.Resource `json:"resource"`
 }
 
-func resourcesStopped(ctx context.Context, processes map[string]int) (bool, error) {
-	if len(processes) == 0 {
-		return true, nil
+func decodeProcesses(raw, ownerID string) (ownedResources, error) {
+	resources := ownedResources{groups: map[string]int{}, containers: map[string]containerapi.Resource{}}
+	var entries map[string]json.RawMessage
+	if len(raw) > 1<<20 || json.Unmarshal([]byte(raw), &entries) != nil || entries == nil || len(entries) > 16 {
+		return resources, errors.New("invalid private resource ownership; resources retained")
 	}
-	for _, group := range processes {
+	for id, value := range entries {
+		if !ownerIDPattern.MatchString(id) {
+			return resources, errors.New("invalid private resource identity; resources retained")
+		}
+		var group int
+		if json.Unmarshal(value, &group) == nil {
+			if group < 0 {
+				return resources, errors.New("invalid private process identity; resources retained")
+			}
+			resources.groups[id] = group
+			continue
+		}
+		reference, err := decodeContainer(value, ownerID, id)
+		if err != nil {
+			return resources, errors.New("invalid private container ownership; resources retained")
+		}
+		resources.containers[id] = reference
+	}
+	return resources, nil
+}
+func resourcesStopped(ctx context.Context, resources ownedResources) (bool, error) {
+	for _, group := range resources.groups {
 		if group == 0 {
 			return false, nil
 		}
 	}
-	for _, group := range processes {
+	for _, group := range resources.groups {
 		alive, err := lifetime.GroupAlive(ctx, group)
 		if err != nil {
 			return false, err
 		}
 		if alive {
+			return false, nil
+		}
+	}
+	for _, resource := range resources.containers {
+		if resource.ContainerID == "" {
+			return false, nil
+		}
+		client, err := containerapi.New(resource.Endpoint)
+		if err != nil {
+			return false, err
+		}
+		observation, err := client.Observe(ctx, resource)
+		_ = client.Close()
+		if err != nil {
+			return false, err
+		}
+		if observation.Present {
 			return false, nil
 		}
 	}
@@ -263,7 +303,7 @@ func (o *PrivateOwner) Close() error {
 			o.err = errors.New("cannot inspect private resource ownership; storage retained")
 			return
 		}
-		processes, err := decodeProcesses(raw)
+		processes, err := decodeProcesses(raw, o.ID)
 		if err != nil {
 			o.err = err
 			return

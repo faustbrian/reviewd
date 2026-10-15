@@ -337,7 +337,7 @@ func (s *Store) recoverPrivateOwner(ctx context.Context, id, raw string, dry boo
 		result.Storage = root
 		return result, nil
 	}
-	processes, decodeErr := decodeProcesses(raw)
+	processes, decodeErr := decodeProcesses(raw, id)
 	stopped := false
 	if decodeErr == nil {
 		stopped, decodeErr = resourcesStopped(ctx, processes)
