@@ -31,7 +31,7 @@ const testContainer = "ccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 // lifecycle. No container, daemon, model or operating-system child is used.
 func TestOwnedCommandScopeRequiresTerminalOutputAndCanonicalRemoval(t *testing.T) {
 	helper, helperHash := buildFixtureHelper(t, "arm64")
-	for _, mode := range []string{"complete", "complete-empty", "exit-mismatch", "capture-missing", "capture-malformed", "capture-tampered", "capture-stale", "unknown-create", "start-ack-lost", "unknown-terminal", "remove-ack-only", "cancelled-before-dispatch", "cancelled-active", "close-active", "missing-image"} {
+	for _, mode := range []string{"capture-incomplete", "complete", "complete-empty", "exit-mismatch", "capture-missing", "capture-malformed", "capture-tampered", "capture-stale", "unknown-create", "start-ack-lost", "unknown-terminal", "remove-ack-only", "cancelled-before-dispatch", "cancelled-active", "close-active", "missing-image"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			directory := filepath.Join(t.TempDir(), "state")
@@ -45,6 +45,20 @@ func TestOwnedCommandScopeRequiresTerminalOutputAndCanonicalRemoval(t *testing.T
 				t.Fatal(err)
 			}
 			defer owner.Close()
+			var feedbackRun store.Run
+			if mode == "capture-incomplete" {
+				var created bool
+				feedbackRun, created, err = durable.Create(ctx, store.Run{Purpose: "feedback", OwnerID: owner.ID, Repository: "github.com/owner/repo", RepositoryID: 99, PullID: 700, Number: 17, ActorID: 43, ActorLogin: "author", WorkKey: "incomplete-command", State: store.Queued, Configuration: json.RawMessage(`{}`)})
+				if err != nil || !created {
+					t.Fatal("create feedback fixture", err)
+				}
+				if won, err := durable.ClaimFeedback(ctx, feedbackRun.ID); err != nil || !won {
+					t.Fatal("claim feedback fixture", err)
+				}
+				if err := owner.KeepFeedbackWorkspace(ctx, feedbackRun.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
 			workspace := filepath.Join(owner.Root, "checkout")
 			if err := os.Mkdir(workspace, 0700); err != nil {
 				t.Fatal(err)
@@ -111,8 +125,8 @@ func TestOwnedCommandScopeRequiresTerminalOutputAndCanonicalRemoval(t *testing.T
 						container = true
 					}
 				}
-				if !pending || !container {
-					t.Error("runtime mutation preceded durable command/container identity", raw)
+				if pending || !container {
+					t.Error("runtime mutation lacks its sole durable container identity", raw)
 				}
 			}
 			server := &http.Server{ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -224,7 +238,7 @@ func TestOwnedCommandScopeRequiresTerminalOutputAndCanonicalRemoval(t *testing.T
 								if mode == "complete-empty" || mode == "exit-mismatch" {
 									exit = 0
 								}
-								if err := session.Finish(exit, true); err != nil {
+								if err := session.Finish(exit, mode != "capture-incomplete"); err != nil {
 									t.Error(err)
 								}
 								if mode == "capture-malformed" {
@@ -324,6 +338,51 @@ func TestOwnedCommandScopeRequiresTerminalOutputAndCanonicalRemoval(t *testing.T
 				}
 				if _, err := os.Stat(owner.Root); !os.IsNotExist(err) {
 					t.Fatal("completed owner retained storage")
+				}
+				return
+			}
+			if removed.Load() {
+				if runErr == nil || errors.Is(runErr, lifetime.ErrCleanupUncertain) || result.Stdout != "" || result.Stderr != "" {
+					t.Fatalf("invalid output was accepted or canonical removal became unproven shutdown: %+v %v", result, runErr)
+				}
+				if mode == "capture-incomplete" && !errors.Is(runErr, commandcapture.ErrIncomplete) {
+					t.Fatal("incomplete output lost its failure identity", runErr)
+				}
+				beforeRetry := mutations.Load()
+				if _, retryErr := host.Run(ctx, []string{"printf", "must not run"}, time.Second); retryErr == nil || mutations.Load() != beforeRetry {
+					t.Fatal("failed command output admitted implicit retry", retryErr)
+				}
+				if err := host.Close(); err == nil {
+					t.Fatal("failed command output became successful host completion")
+				}
+				if feedbackRun.ID != "" {
+					outcome := json.RawMessage(`{"effects":[{"kind":"reply","state":"verified","id":719}],"remaining":"invalid command output"}`)
+					if err := owner.SuspendFeedback(); err != nil {
+						t.Fatal("output validity prevented proven shutdown and pending retention", err)
+					}
+					if err := durable.FinishFeedback(ctx, feedbackRun.ID, store.FeedbackPending, outcome, "invalid output"); err != nil {
+						t.Fatal(err)
+					}
+					observed, err := durable.Get(ctx, feedbackRun.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					resumed, err := durable.ResumeFeedbackOwner(ctx, observed)
+					if err != nil {
+						t.Fatal("explicit continuation was blocked after canonical removal", err)
+					}
+					defer resumed.SuspendFeedback()
+					if observed.OwnerClosed || resumed.ID != owner.ID || resumed.Root != owner.Root || string(observed.Outcome) != string(outcome) {
+						t.Fatal("continuation replaced pending owner/effects")
+					}
+					if contents, err := os.ReadFile(canary); err != nil || string(contents) != "retained source" {
+						t.Fatal("pending source was lost", err)
+					}
+					if mutations.Load() != beforeRetry {
+						t.Fatal("explicit owner reopen replayed a command")
+					}
+				} else if err := owner.Close(); err != nil {
+					t.Fatal("invalid output prevented positively stopped owner cleanup", err)
 				}
 				return
 			}

@@ -142,12 +142,20 @@ request identity, byte counts, digests and the matching explicit exit code.
 Invalid UTF-8 is unsupported and incomplete, never silently normalized.
 
 Start acknowledgement, foreground exit, complete output and proven container
-removal remain different facts. An uncertain create, missing terminal result,
-unproven removal or failed capture retains the common private owner and blocks
-replacement modification. Cancellation attempts owned cleanup but cannot convert
-an unknown result into success. Reopening the profile preserves uncertainty
-without command replay. Automatic reclamation of an unresolved completion slot
-is not implemented.
+removal remain different facts. The tagged container reservation is the sole
+lifetime authority for these commands. An uncertain create or unproven removal
+retains that resource and blocks replacement modification. After confirmed
+removal, missing or invalid output remains a failed command, not an unproven
+container lifetime. It cannot satisfy verification or trigger an implicit retry;
+unfinished feedback keeps its original workspace and recorded effects for
+explicit same-owner continuation. Cancellation cannot turn unknown output into
+success. Historical unidentified numeric completion slots remain preserved;
+there is no automatic migration or reclamation of those older ambiguous records.
+
+After successful restriction setup, a proven missing executable returns an
+authenticated exit 127 with a fixed diagnostic, so an agent may choose a different
+available command. Unsupported restriction setup and other unproven dispatch
+failures remain incomplete; neither path permits host execution as a fallback.
 
 Initial macOS checkout now selects this provider using frozen operator-only
 endpoint/image settings and the paired installed helper. Git trusts only the

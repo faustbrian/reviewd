@@ -135,7 +135,6 @@ func (h *Host) Run(ctx context.Context, argv []string, timeout time.Duration) (r
 	}
 	h.active = active
 	h.state.Unlock()
-	var completion lifetime.Process
 	var owned *store.PrivateContainer
 	var reference containerapi.Resource
 	scopeClosed := true
@@ -161,16 +160,18 @@ func (h *Host) Run(ctx context.Context, argv []string, timeout time.Duration) (r
 		cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
 		defer stop()
 		cleanupErr := remove(cleanup)
-		complete := scopeClosed && cleanupErr == nil && (outputKnown || !startAttempted)
-		if complete {
-			if finishErr := lifetime.Finish(completion); finishErr != nil {
-				complete = false
-				cleanupErr = errors.Join(cleanupErr, finishErr)
-			}
-		}
+		// The durable container reservation is the sole lifetime authority.
+		// Rejected output cannot undo its canonical removal acknowledgement.
+		stopped := scopeClosed && cleanupErr == nil
 		h.state.Lock()
-		if !complete {
+		if !stopped {
 			h.uncertain = errors.Join(lifetime.ErrCleanupUncertain, err, cleanupErr)
+			err = h.uncertain
+			result = codex.CommandResult{}
+		} else if startAttempted && !outputKnown {
+			// Preserve failure and refuse implicit command re-entry, but allow
+			// the existing feedback owner to retain/suspend proven-stopped work.
+			h.uncertain = errors.Join(commandcapture.ErrIncomplete, err)
 			err = h.uncertain
 			result = codex.CommandResult{}
 		} else {
@@ -191,10 +192,6 @@ func (h *Host) Run(ctx context.Context, argv []string, timeout time.Duration) (r
 	// The key is a private input of this owner, outside every container mount.
 	// Retain it with unresolved work; no second journal or replay authority exists.
 	if err := os.WriteFile(capture+".key", key, 0600); err != nil {
-		return result, err
-	}
-	completion, err = lifetime.PendingCompletion(operation)
-	if err != nil {
 		return result, err
 	}
 	owned, err = h.owner.StartingContainer(operation, h.options.Endpoint, h.identity.DaemonID)

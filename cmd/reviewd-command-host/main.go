@@ -4,17 +4,21 @@ package main
 
 import (
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/faustbrian/reviewd/internal/commandcapture"
 	"os"
+	"os/exec"
 )
 
 var version = "0.1.0-dev"
 
 func main() {
 	if len(os.Args) >= 4 && os.Args[1] == "--restricted-child" && os.Args[2] == "--" {
-		_ = commandcapture.ExecRestricted(os.Args[3:])
+		if err := commandcapture.ExecRestricted(os.Args[3:]); errors.Is(err, exec.ErrNotFound) {
+			os.Exit(127)
+		}
 		os.Exit(125)
 	}
 	if len(os.Args) == 2 && os.Args[1] == "--version" {

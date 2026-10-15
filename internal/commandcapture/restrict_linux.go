@@ -1,6 +1,8 @@
 package commandcapture
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
@@ -21,7 +23,12 @@ func ExecRestricted(argv []string) error {
 		return ErrIncomplete
 	}
 	defer failure.Close()
-	defer func() { _, _ = failure.Write([]byte{1}) }()
+	setupFailed := true
+	defer func() {
+		if setupFailed {
+			_, _ = failure.Write([]byte{1})
+		}
+	}()
 	runtime.LockOSThread()
 	// Deliberately never unlock a restricted thread. All error paths exit the
 	// trusted child; successful exec removes the Go runtime and its other threads.
@@ -30,6 +37,16 @@ func ExecRestricted(argv []string) error {
 		return ErrIncomplete
 	}
 	executable, err := exec.LookPath(argv[0])
+	if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
+		// Restrictions succeeded and lookup proved no repository program was
+		// launched. A known dispatch failure is complete, not a setup mystery.
+		if err := failure.Close(); err != nil {
+			return ErrIncomplete
+		}
+		setupFailed = false
+		_, _ = fmt.Fprintln(os.Stderr, "requested command executable was not found")
+		return exec.ErrNotFound
+	}
 	if err != nil {
 		return ErrIncomplete
 	}

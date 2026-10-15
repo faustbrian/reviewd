@@ -69,10 +69,14 @@ func TestNativeOwnedContainerCommands(t *testing.T) {
 		for _, host := range hosts {
 			cleanupErr = errors.Join(cleanupErr, host.Close())
 		}
-		cleanupErr = errors.Join(cleanupErr, owner.Close(), durable.Close())
-		if cleanupErr != nil {
-			t.Errorf("unproven owned fixture retained for reconciliation at %s: %v", root, cleanupErr)
+		ownerErr := owner.Close()
+		storeErr := durable.Close()
+		if ownerErr != nil || storeErr != nil {
+			t.Errorf("unproven owned fixture retained for reconciliation at %s: %v", root, errors.Join(cleanupErr, ownerErr, storeErr))
 			return
+		}
+		if cleanupErr != nil {
+			t.Errorf("owned command output failed after proven owner closure: %v", cleanupErr)
 		}
 		if err := os.RemoveAll(root); err != nil {
 			t.Error("cannot remove proven owned fixture", err)
@@ -172,6 +176,16 @@ func TestNativeOwnedContainerCommands(t *testing.T) {
 			result, err := host.Run(ctx, []string{"/bin/sh", "-c", "exit 0"}, 30*time.Second)
 			if err != nil || result.ExitCode != 0 || result.Stdout != "" || result.Stderr != "" {
 				t.Fatalf("empty foreground output not complete: %+v %v", result, err)
+			}
+			for _, missing := range []string{"reviewd-fixture-executable-does-not-exist", "/reviewd-fixture-executable-does-not-exist"} {
+				result, err = host.Run(ctx, []string{missing}, 30*time.Second)
+				if err != nil || result.ExitCode != 127 || result.Stdout != "" || result.Stderr != "requested command executable was not found\n" {
+					t.Fatalf("missing executable %q was not a bounded authenticated failure: %+v %v", missing, result, err)
+				}
+			}
+			result, err = host.Run(ctx, []string{"/bin/sh", "-c", "printf 'after missing executable\\n'"}, 30*time.Second)
+			if err != nil || result.ExitCode != 0 || result.Stdout != "after missing executable\n" || result.Stderr != "" {
+				t.Fatalf("known dispatch failure blocked a different command: %+v %v", result, err)
 			}
 			if err := host.Close(); err != nil {
 				t.Fatal(err)
