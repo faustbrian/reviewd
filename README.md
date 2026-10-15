@@ -2,17 +2,19 @@
 
 A personal, local-first GitHub review inbox backed by Codex.
 
-Implementation is in progress. The [specification](docs/SPECIFICATION.md)
-records the complete scope. Setup, configuration explanation, private reviews,
-explicit publication/reconciliation, the headless watcher, durable decisions,
-grouped notifications, personal holds, the optional terminal inbox and private
-owner/resource recovery are integrated. The `dd4d595` CI snapshots include these
-workflows on macOS and Linux, amd64 and arm64. Live GitHub publication
-acceptance is not yet complete; native observations cover only their documented
-tested environments.
+The [specification](docs/SPECIFICATION.md) records the complete scope.
+Setup, explainable project configuration, private reviews, explicit
+publication/reconciliation, the headless watcher, durable decisions, grouped
+notifications, personal holds, the optional terminal inbox and private
+owner/resource recovery are integrated. macOS and Linux are supported on
+amd64 and arm64.
 
-See [implementation boundaries](docs/IMPLEMENTATION.md) for the current scope
-and [acceptance tracking](docs/ACCEPTANCE.md) for outstanding product work.
+A controlled live GitHub check prepared a real Codex review, published one
+head-pinned COMMENT review and inline finding, and verified restart-safe
+readback without a duplicate. The test PR was closed without merge and its
+branch removed. See [acceptance evidence](docs/ACCEPTANCE.md) for exact identities,
+deterministic failure-path coverage and native-environment limits, and
+[implementation boundaries](docs/IMPLEMENTATION.md) for compatibility choices.
 
 ## Current CLI
 

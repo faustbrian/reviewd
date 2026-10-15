@@ -45,7 +45,9 @@ try:
  if mode=='interrupt':send(b'\x03')
  elif mode=='dismiss':send(b'\x1b');time.sleep(.15);send(b'q')
  else:
-  send(b'\r');wait_for('Answers captured privately')
+  # The renderer may reuse the existing 'Answer' prefix via cursor movement.
+  # Confirm the decision text, then verify exact selected values in SQLite.
+  send(b'\r');wait_for('captured privately. y sends this exact selection; n/esc dismisses.')
   if mode=='stale':
    result=subprocess.run([binary,'--config',config,'cancel',run,'--json'],capture_output=True,timeout=5)
    if result.returncode:raise AssertionError('owned cancellation failed')

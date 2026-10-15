@@ -13,9 +13,10 @@ snapshots: setup/configuration, immutable private review preparation, explicit
 publication/reconciliation, durable discovery and scheduling, CI waiting,
 server-guided cooldowns, notifications, project/item holds, optional terminal
 controls, live primary progress, explicit clarification, cancellation, owner
-recovery and retention. It is not the finished goal: live GitHub publication
-is still unverified; native observations cover only their documented tested
-environments.
+recovery and retention. The subsequent canonical-comment readback fix reconciles
+GitHub's legacy review-scoped response shape. A controlled live check now
+establishes actual publication and duplicate-free repeated readback; native
+observations cover only their documented tested environments.
 
 All four native quality and all four native package jobs passed for that
 revision. Downloaded artifacts were verified. Separate native macOS observations
@@ -23,7 +24,7 @@ cover actual-model owner-exit/EOF recovery, ordinary Terminal header drag and
 notification adapter dispatch/AX surfacing. Linux observations also cover the
 actual terminal artifact and private xterm/Dunst components. Their limits are in
 [acceptance tracking](ACCEPTANCE.md); none proves power-loss recovery, every
-terminal/desktop, or live GitHub publication.
+terminal/desktop. Live publication has its own controlled acceptance below.
 
 See [watching](WATCHING.md), [configuration](CONFIGURATION.md),
 [reviews](REVIEWS.md), [publication](PUBLICATION.md), [controls](CONTROLS.md),
@@ -71,7 +72,8 @@ future host tool or another Codex version.
 - Same-head review requests need an actual request-event identity, not just the
   current requested-reviewer list.
 - Source/model fixtures, private Codex execution and real GitHub publication are
-  separate proving boundaries. No GitHub publication test has been performed.
+  separate proving boundaries. The controlled publication test is recorded in
+  [acceptance evidence](ACCEPTANCE.md#controlled-live-github-publication).
 
 ## Verification
 

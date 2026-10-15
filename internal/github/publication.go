@@ -116,7 +116,17 @@ func (c *Client) ReviewComments(ctx context.Context, pull Pull, id int64) ([]Rem
 		if json.Unmarshal(data, &row) != nil || row.ID <= 0 || row.ReviewID != id {
 			return nil, errors.New("GitHub returned incomplete or mismatched review comments")
 		}
-		comments = append(comments, row)
+		// Review-scoped lists can contain only legacy diff positions, not
+		// canonical line/side anchors. Resolve each exact listed identity;
+		// never infer a file line from its position or trust a stale summary.
+		canonical, err := c.Comment(ctx, pull, row.ID)
+		if err != nil {
+			return nil, err
+		}
+		if canonical.ID != row.ID || canonical.ReviewID != id {
+			return nil, errors.New("GitHub returned a mismatched canonical review comment")
+		}
+		comments = append(comments, canonical)
 	}
 	return comments, nil
 }

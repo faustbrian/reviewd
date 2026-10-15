@@ -25,13 +25,26 @@ import (
 
 func TestExplicitPublicationVerifiesPinnedReviewWithoutStartingCodex(t *testing.T) {
 	cases := []struct {
-		name                                                                                                                                                                                                                                                                               string
-		self, lost, hidden, partial, mixedURL, contextChanged, noDecision, never, existingInline, requirementChanged, existingReview, repairLost, repairHidden, checksChanged, postCheckChanged, clean, twoFindings, repairRace, resolvedThread, partialOutage, repairABA, uncertainSource bool
-		state                                                                                                                                                                                                                                                                              store.State
-		code                                                                                                                                                                                                                                                                               int
-		posts                                                                                                                                                                                                                                                                              int
+		name                                                                                                                                                                                                                                                                                               string
+		self, lost, hidden, partial, mixedURL, contextChanged, noDecision, never, existingInline, requirementChanged, existingReview, repairLost, repairHidden, checksChanged, postCheckChanged, clean, twoFindings, repairRace, resolvedThread, partialOutage, repairABA, uncertainSource, legacyReadback bool
+		canonicalMismatch                                                                                                                                                                                                                                                                                  string
+		state                                                                                                                                                                                                                                                                                              store.State
+		code                                                                                                                                                                                                                                                                                               int
+		posts                                                                                                                                                                                                                                                                                              int
 	}{
 		{name: "normal", state: store.Published, posts: 1},
+		{name: "legacy_review_readback", legacyReadback: true, state: store.Published, posts: 1},
+		{name: "legacy_lost_response", legacyReadback: true, lost: true, state: store.Published, posts: 1},
+		{name: "legacy_existing_review", legacyReadback: true, existingReview: true, state: store.Published},
+		{name: "legacy_partial", legacyReadback: true, partial: true, twoFindings: true, state: store.Partial, code: 1, posts: 1},
+		{name: "canonical_wrong_actor", legacyReadback: true, canonicalMismatch: "actor", state: store.Partial, code: 1, posts: 1},
+		{name: "canonical_wrong_commit", legacyReadback: true, canonicalMismatch: "commit", state: store.Partial, code: 1, posts: 1},
+		{name: "canonical_wrong_anchor", legacyReadback: true, canonicalMismatch: "anchor", state: store.Partial, code: 1, posts: 1},
+		{name: "canonical_wrong_body", legacyReadback: true, canonicalMismatch: "body", state: store.Partial, code: 1, posts: 1},
+		{name: "canonical_wrong_url", legacyReadback: true, canonicalMismatch: "url", state: store.Partial, code: 1, posts: 1},
+		{name: "canonical_reply", legacyReadback: true, canonicalMismatch: "reply", state: store.Partial, code: 1, posts: 1},
+		{name: "canonical_unavailable", legacyReadback: true, canonicalMismatch: "unavailable", state: store.PublicationUnknown, code: 1, posts: 1},
+
 		{name: "source_shutdown_uncertain", uncertainSource: true, state: store.Prepared, code: 1},
 		{name: "repair_source_shutdown_uncertain", uncertainSource: true, partial: true, state: store.Partial, code: 1, posts: 1},
 		{name: "checks_refresh_rebinds_consent", checksChanged: true, state: store.Prepared, code: 1},
@@ -301,6 +314,28 @@ func TestExplicitPublicationVerifiesPinnedReviewWithoutStartingCodex(t *testing.
 				case "/repos/owner/repo/pulls/comments/75":
 					json.NewEncoder(w).Encode(thirdComment())
 				case "/repos/owner/repo/pulls/comments/72", "/repos/owner/repo/pulls/comments/74":
+					if r.URL.Path == "/repos/owner/repo/pulls/comments/72" && (!tc.partial || tc.twoFindings) {
+						row := remoteComment(71)
+						switch tc.canonicalMismatch {
+						case "actor":
+							row["user"] = map[string]any{"id": actor + 1, "login": "other"}
+						case "commit":
+							row["original_commit_id"] = base
+						case "anchor":
+							row["original_line"] = 99
+						case "body":
+							row["body"] = "A different finding."
+						case "url":
+							row["html_url"] = "https://other.example/owner/repo/pull/17#discussion_r72"
+						case "reply":
+							row["in_reply_to_id"] = 70
+						case "unavailable":
+							w.WriteHeader(503)
+							return
+						}
+						json.NewEncoder(w).Encode(row)
+						return
+					}
 					if repairHidden {
 						w.WriteHeader(404)
 						return
@@ -317,6 +352,15 @@ func TestExplicitPublicationVerifiesPinnedReviewWithoutStartingCodex(t *testing.
 					}
 					json.NewEncoder(w).Encode(remoteReview())
 				case "/repos/owner/repo/pulls/17/comments", "/repos/owner/repo/pulls/17/reviews/71/comments":
+					if tc.legacyReadback && r.URL.Path == "/repos/owner/repo/pulls/17/reviews/71/comments" && (posts > 0 || existingRemote) && !hidden {
+						row := remoteComment(71)
+						delete(row, "line")
+						delete(row, "original_line")
+						delete(row, "side")
+						row["position"] = 19
+						json.NewEncoder(w).Encode([]any{row})
+						return
+					}
 					if tc.repairABA && posts > 0 && r.URL.Path == "/repos/owner/repo/pulls/17/comments" {
 						json.NewEncoder(w).Encode(append([]any{remoteComment(71)}, completedRepairs...))
 						return

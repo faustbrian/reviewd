@@ -88,6 +88,7 @@ publication records.
 Current evidence uses owned HTTP/SQLite fixtures, not live team membership or
 GitHub discovery acceptance. The local scheduler, notifications and personal
 holds have owned journey coverage. The [optional terminal inbox](TERMINAL.md)
-uses the same application behavior. Owner-aware recovery is also wired; final
-native acceptance remains outstanding. See [watching](WATCHING.md) for durable
+uses the same application behavior. Owner-aware recovery is also wired;
+[native acceptance](ACCEPTANCE.md) records the exercised environments and limits.
+See [watching](WATCHING.md) for durable
 server cooldown and retry behavior.

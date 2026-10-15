@@ -3,7 +3,8 @@
 The configuration resolver and setup/diagnostic commands are implemented.
 Private reviewing, explicit publication and the initial headless watcher are
 available. See [foreground watching](WATCHING.md) for current automation and
-recovery boundaries; whole-product acceptance remains incomplete.
+recovery boundaries and [acceptance evidence](ACCEPTANCE.md) for tested workflows
+and environment-specific limits.
 
 ## Locations
 

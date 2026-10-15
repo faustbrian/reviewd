@@ -6,7 +6,7 @@ The exact numbering refers to section 16 of the specification.
 
 ## Current delivered boundary
 
-The integrated workflow is committed and pushed at
+The integrated behavioral baseline is committed and pushed at
 `dd4d595e5c7fc176e23a0c9191771063828c8ecf` (tree
 `399ba084a69692c32536514106021d38d336a400`). All four native quality and all
 four native packaging jobs passed in
@@ -15,23 +15,27 @@ Downloaded archives for all four targets passed checksum/provenance/license
 inspection; the macOS arm64 download also passed local version/help/completion
 smoke. This includes the watcher, notifications, terminal controls, clarification,
 owner recovery, retention and durable GitHub cooldowns. It is a development
-snapshot, not a formal release or whole-goal completion.
+snapshot, not a formal release. Subsequent documentation-only revision
+`47be1fa06f3314ace767d67666f19a4fca860d45` passed all eight jobs in
+[CI run 38600924373](https://github.com/faustbrian/reviewd/actions/runs/38600924373).
+The live check below used its checksum-verified macOS arm64 artifact for
+preparation/submission, then the canonical-readback fix for reconciliation.
 
 Real Codex execution, owned Git/HTTP journeys, installed-host capability checks,
 native GUI observations and live GitHub publication are separate boundaries.
-No test review has been posted to GitHub.
+The controlled live publication and its cleanup are recorded below.
 
 | ID | Required outcome | Current evidence |
 | --- | --- | --- |
-| 01 | API notify-only never starts a reviewer | Owned headless CLI journey imports notify-only work without source acquisition or a model turn; live acceptance outstanding |
-| 02 | Bill automatic flow prepares and verifies publication | Owned Git/HTTP/model watcher journey waits for CI, prepares, publishes, verifies readback and does not repost after restart; live GitHub acceptance outstanding |
+| 01 | API notify-only never starts a reviewer | Owned headless CLI journey imports notify-only work without source acquisition or a model turn; this policy/failure scenario was exercised with owned fixtures |
+| 02 | Bill automatic flow prepares and verifies publication | Owned Git/HTTP/model watcher journey waits for CI, prepares, publishes, verifies readback and does not repost after restart; live publication has the separate controlled boundary below |
 | 03 | Duplicate observations do not duplicate jobs | Owned watcher restarts preserve event/run identity and do not repeat model turns or publication in the exercised journey |
-| 04 | New commits invalidate old publication consent | Local watcher/service/store journeys invalidate linked waiting/prepared evidence and stop active work as stale, reject late preparation and old publication decisions, and preserve publication already claimed; live GitHub acceptance outstanding |
-| 05 | Explicit same-head re-request creates distinct work | Local owned watcher journey dispatches a distinct prepared run for an appended request at the same base/head, preserves the prior run and does not repeat after another restart; live GitHub acceptance outstanding |
-| 06 | Material context invalidates cached review evidence | Local journeys exercise changed requirements, including a simultaneous same-head re-request, across active/waiting/prepared/manual final validation; pure re-requests retain distinct valid evidence; live acceptance outstanding |
-| 07 | Restart after submit does not repost blindly | Partial: durable attempts and repeated publication/reconciliation with reopened SQLite clients; live GitHub acceptance outstanding |
-| 08 | Lost responses reconcile or remain explicitly unknown | Owned HTTP transport-loss journeys verify both canonical recovery and durable unknown/no-repost for reviews and repairs; live acceptance outstanding |
-| 09 | Partial publication avoids duplicate comments | Explicit repair journey posts only the missing finding, retains the original review and reconciles lost repair responses; live acceptance outstanding |
+| 04 | New commits invalidate old publication consent | Local watcher/service/store journeys invalidate linked waiting/prepared evidence and stop active work as stale, reject late preparation and old publication decisions, and preserve publication already claimed; live publication has the separate controlled boundary below |
+| 05 | Explicit same-head re-request creates distinct work | Local owned watcher journey dispatches a distinct prepared run for an appended request at the same base/head, preserves the prior run and does not repeat after another restart; live publication has the separate controlled boundary below |
+| 06 | Material context invalidates cached review evidence | Local journeys exercise changed requirements, including a simultaneous same-head re-request, across active/waiting/prepared/manual final validation; pure re-requests retain distinct valid evidence; this policy/failure scenario was exercised with owned fixtures |
+| 07 | Restart after submit does not repost blindly | durable attempts and repeated publication/reconciliation with reopened SQLite clients; live publication has the separate controlled boundary below |
+| 08 | Lost responses reconcile or remain explicitly unknown | Owned HTTP transport-loss journeys verify both canonical recovery and durable unknown/no-repost for reviews and repairs; this policy/failure scenario was exercised with owned fixtures |
+| 09 | Partial publication avoids duplicate comments | Explicit repair journey posts only the missing finding, retains the original review and reconciles lost repair responses; this policy/failure scenario was exercised with owned fixtures |
 | 10 | Ask remains pending without an attached terminal | Durable pending/start/skip decisions verified through ordinary CLI and reopened SQLite; native PTY dismissal/interrupt grants no decision |
 | 11 | Notification expiry never authorizes action | Local headless/SQLite notification checks preserve pending start and publication decisions; no click/expiry action grants authority; native macOS adapter dispatch/AX observation is separate from these decision checks; a separate Linux xterm/Dunst fixture proves the bounded adapter/GUI observations below |
 | 12 | Initial sync does not process the backlog automatically | Owned CLI/HTTP/SQLite watcher journey holds initial automatic requests; explicit item-scoped start releases a private decision |
@@ -40,24 +44,26 @@ No test review has been posted to GitHub.
 | 15 | Invalid reload preserves the last valid config | Owned continuous headless/JSON watcher retains successive notify/ask policies across invalid reloads, recovers on valid edits, and starts no reviewer; frozen waiting-run model is separately verified after configuration change |
 | 16 | Missing prerequisites produce actionable errors | Setup/doctor verified with fixtures and hands-on real account metadata; actual review/provider failures remain a separate boundary |
 | 17 | Mandatory check states classified accurately | Required context/head/integration state fixtures and end-of-preparation refresh exercise the supported check states; unresolved reusable-workflow source identity remains an explicit unavailable readiness gap, not a passing check |
-| 18 | Interrupted/malformed workers never become clean reviews | Partial: protocol EOF/malformed-response tests plus cross-client cancellation, rejected late preparation and a worker returning a late successful response; active primary identity/status persists before completion, and a progress-persistence failure stops the turn; local clarification journeys retain exact questions, require an explicit second-client answer, and fail on unanswered clear/cancellation/EOF |
+| 18 | Interrupted/malformed workers never become clean reviews | protocol EOF/malformed-response tests plus cross-client cancellation, rejected late preparation and a worker returning a late successful response; active primary identity/status persists before completion, and a progress-persistence failure stops the turn; local clarification journeys retain exact questions, require an explicit second-client answer, and fail on unanswered clear/cancellation/EOF |
 | 19 | Own-PR feedback grants no fix authority | Discovery imports human feedback as attention-only and never starts a fixer; local notifications group feedback with other attention for the same PR; native macOS adapter observation does not establish real feedback delivery; live feedback remains distinct from the bounded Linux adapter/GUI observations below |
-| 20 | Self-review uses the permitted GitHub event | Prepared-result and publisher fixtures verify separate internal opinion and head-pinned COMMENT; real publication outstanding |
+| 20 | Self-review uses the permitted GitHub event | Prepared-result and publisher fixtures verify separate internal opinion and head-pinned COMMENT; the controlled live self-review below verifies COMMENT and its canonical inline |
 | 21 | Closing a PR cancels queued work | Owned CLI journey verifies closure before a queued explicit decision can acquire source or create a run; it does not establish native active-worker closure behavior |
-| 22 | Debounce coalesces code updates | Local owned Git/HTTP watcher burst holds intermediate heads without source/model work, then acquires and prepares only the final revision once; live/native acceptance remains outstanding |
+| 22 | Debounce coalesces code updates | Local owned Git/HTTP watcher burst holds intermediate heads without source/model work, then acquires and prepares only the final revision once; native interaction has the separate boundary below |
 | 23 | Quiet hours/snooze/grouping preserve inbox state | Local SQLite/CLI checks cover grouping, quiet-hour/DST digests, restart deduplication, reconnect summaries and nonfatal desktop failures; personal hold checks cover durable duration/head snoozes and project pause/resume; native macOS adapter observation is separate; a separate Linux xterm/Dunst fixture is recorded below |
-| 24 | Concurrent clients preserve scheduler invariants | Partial: two SQLite clients, exclusive watcher lease and shared model slots verified across processes, including lowered caps and process exit; cancellation versus preparation has one transactional winner; local scheduler admission exercises fresh-request preference and older optional progress through repeated refills/restarts; native Linux automated runtime passed in the delivered CI; the native Linux terminal artifact observation below covers basic interaction/restoration; bounded Linux xterm/Dunst observations are recorded below |
-| 25 | Model and effort reach actual Codex invocation | Partial: subprocess wire tests, opt-in live fixture and an actual primary/independent leaf acceptance using gpt-6.1-sol/high; the leaf evidence capability and distinct sessions were exercised |
-| 26 | Worker cannot bypass publication policy | Partial: sealed broker, restricted runtime and excluded credentials; publisher remains an application-only capability |
-| 27 | Owned snapshots/process trees clean up safely | Partial: runtime checks, native bare-source success/failure cleanup and private acceptance; cross-client cancellation journeys remove actual immutable snapshots; controlled native macOS cancellation of an actual Codex turn retains identity and removes owned runtime/source state; local owner/resource recovery also covers loss, ambiguity, rollback and bounded progress; native actual-model owner-exit recovery is separately verified below; worker SIGKILL/power-loss and hands-on Linux owner-recovery are not established |
-| 28 | TUI resize/keyboard/native selection/restoration | Partial: optional attachment, Unicode/cell layout and exact-preview checks; native macOS PTY journeys verify confirmed overrides, dismissal/interrupt, resizing, restored operational terminal modes and no mouse-reporting activation; native macOS clarification editor also verifies typed secret-masked answers, dismissal, stale-target rejection and interruption; ordinary unmodified header drag selection passed in macOS Terminal using the delivered binary; native Linux basic terminal interaction/restoration is verified below; Linux xterm header drag is independently verified below |
-| 29 | Headless and JSON expose the same workflow states | Partial: keyboard attachment reuses ordinary commands for decisions, controls, cancellation and publication; headless/plain/JSON state checks and redirected-output fallback exercised; local clarification plain/JSON answering and secret-masked terminal editor share the exact input ID; idle watcher/inbox detachment preserves ownership and pending decisions as detailed below; live publication and untested environments remain separate |
+| 24 | Concurrent clients preserve scheduler invariants | two SQLite clients, exclusive watcher lease and shared model slots verified across processes, including lowered caps and process exit; cancellation versus preparation has one transactional winner; local scheduler admission exercises fresh-request preference and older optional progress through repeated refills/restarts; native Linux automated runtime passed in the delivered CI; the native Linux terminal artifact observation below covers basic interaction/restoration; bounded Linux xterm/Dunst observations are recorded below |
+| 25 | Model and effort reach actual Codex invocation | subprocess wire tests, opt-in live fixture and an actual primary/independent leaf acceptance using gpt-6.1-sol/high; the leaf evidence capability and distinct sessions were exercised |
+| 26 | Worker cannot bypass publication policy | sealed broker, restricted runtime and excluded credentials; publisher remains an application-only capability |
+| 27 | Owned snapshots/process trees clean up safely | runtime checks, native bare-source success/failure cleanup and private acceptance; cross-client cancellation journeys remove actual immutable snapshots; controlled native macOS cancellation of an actual Codex turn retains identity and removes owned runtime/source state; local owner/resource recovery also covers loss, ambiguity, rollback and bounded progress; native actual-model owner-exit recovery is separately verified below; worker SIGKILL/power-loss and hands-on Linux owner-recovery are not established |
+| 28 | TUI resize/keyboard/native selection/restoration | optional attachment, Unicode/cell layout and exact-preview checks; native macOS PTY journeys verify confirmed overrides, dismissal/interrupt, resizing, restored operational terminal modes and no mouse-reporting activation; native macOS clarification editor also verifies typed secret-masked answers, dismissal, stale-target rejection and interruption; ordinary unmodified header drag selection passed in macOS Terminal using the delivered binary; native Linux basic terminal interaction/restoration is verified below; Linux xterm header drag is independently verified below |
+| 29 | Headless and JSON expose the same workflow states | keyboard attachment reuses ordinary commands for decisions, controls, cancellation and publication; headless/plain/JSON state checks and redirected-output fallback exercised; local clarification plain/JSON answering and secret-masked terminal editor share the exact input ID; idle watcher/inbox detachment preserves ownership and pending decisions as detailed below; live publication and untested environments remain separate |
 | 30 | Platform builds and native runtime match claims | Delivered dd4d595 passed four native quality and four packaging jobs, including installed-host capability/clarification checks and native CLI/PTY tests; four hosted artifacts verified; remaining manual platform boundaries are stated below |
 
-Named commands, discovery completeness, full review evidence, selected review
-skill quality, publication preflight, configuration validation, retry budgets,
-retention acceptance, installation and distribution documentation remain in scope beyond
-this table. They must be audited before declaring the complete goal achieved.
+Named commands, discovery completeness, full review evidence, publication
+preflight, configuration validation, retry budgets, retention, installation and
+distribution are covered by the linked workflow documents and application tests.
+The complete command reference is [COMMANDS.md](COMMANDS.md). Real source/model,
+owned failure-path, hosted CI and native observations remain distinct evidence;
+none is a claim that every possible platform or GitHub failure was induced.
 
 The current CLI's hands-on acceptance used task-owned configuration/binary
 storage, the existing Codex account, and read-only GitHub access to
@@ -200,3 +206,49 @@ and restored identical Linux terminal settings. Independent audits accept these
 component observations separately, not a relabelled combined success. All
 owned containers, newly pulled images, private displays and fixture files were
 removed. No model or GitHub operations were performed.
+
+## Controlled live GitHub publication
+
+On 2026-10-15, the authorized test used
+[deliberately faulty draft PR #1](https://github.com/faustbrian/reviewd/pull/1),
+head `e83cec4993dd9fecbbaf1b2f1bf6282401df2928`, against target/comparison base
+`47be1fa06f3314ace767d67666f19a4fca860d45`. The seven-line percentage fixture
+existed only on the test branch, never on main. The downloaded macOS arm64 CI
+artifact passed its published archive/manifest checksums and build provenance.
+
+The normal private CLI used the actual installed `requesting-code-review`,
+`gpt-6.1-sol` with high effort, and existing authorized Codex authentication.
+Run `a648915f267aba791371dc61c4fe5352` retained primary thread
+`01a13d1a-d017-7d63-9362-e351cf408943`, turn
+`01a13d1a-d01e-7002-b3e5-603e356d62f6`, and exact prepared payload
+`93392f898d137bebb1771d75ecf13b3699ceb34b92ac477b6041971bff917350`.
+It found integer division before float conversion at
+`internal/acceptancefixture/percentage.go`, RIGHT line 6. Its internal opinion
+was REQUEST_CHANGES; its proposed self-review event was COMMENT. Before an exact
+payload decision, `publish` exited without a write and GitHub had zero reviews
+and inline comments.
+
+Explicit application publication created
+[COMMENT review 5526797167](https://github.com/faustbrian/reviewd/pull/1#pullrequestreview-5526797167)
+and [inline 4277956671](https://github.com/faustbrian/reviewd/pull/1#discussion_r4277956671).
+This exposed a real readback defect: the review-scoped list omitted line/side,
+although the canonical individual comment had RIGHT/6 and the exact reviewed
+commit. The application correctly retained the submitted review as partial
+rather than blindly reposting, but failed to recognize the present inline.
+
+The canonical-readback fix was exercised against that same persisted run:
+ordinary `publish` without a new payload decision recovered it to published,
+verified the exact review/comment identities and original anchor, and a second
+independent CLI process reopened state and verified them again. Canonical GitHub
+inventories remained exactly one review and one inline. Plain `show` and JSON
+`inbox` exposed verified publication. Private owner records and temporary
+source/skill/runtime roots were absent after shutdown.
+
+The draft was closed without merge, its exact test branch was deleted and
+absence verified, and disposable clone/download/extraction resources were
+removed. The closed PR and review intentionally remain in GitHub history.
+This proves actual private preparation, explicit self-review publication,
+canonical recovery of the observed false-partial result, repeated-process
+no-repost behavior and scoped cleanup. It does not imply that a lost response,
+real missing-inline repair, head race, or team-request change was induced on
+GitHub; those use deterministic owned HTTP/SQLite journeys.

@@ -5,8 +5,9 @@ Go, Python, or SQLite system libraries. Running reviews still requires the
 separately installed GitHub CLI, Git, authenticated Codex CLI, and selected
 review skill described in [setup](CONFIGURATION.md).
 
-The product is still being implemented. A downloadable build is not a claim
-that every specification requirement is finished, nor a formal release.
+CI artifacts are development snapshots, not formal releases. Their manifests
+identify the exact included source; [acceptance evidence](ACCEPTANCE.md)
+separately records the tested user workflows and environment limits.
 
 ## Verified development snapshot
 

@@ -50,6 +50,13 @@ any further write; ambiguity stays unknown. An additional missing finding stays
 partial and needs another explicit invocation. Changed evidence or unexpected
 extra comments require inspection, not a blind repair.
 
-These paths have been exercised with owned Git/HTTP fixtures. Live GitHub
-publication acceptance is still outstanding; no real review has been posted
-as part of development.
+Review-scoped GitHub comment lists may expose only legacy diff positions.
+Readback therefore resolves each listed comment by its exact remote ID through
+the canonical comment endpoint before validating identity and original anchors.
+A missing or mismatched canonical response cannot authorize a repost.
+
+A [controlled live check](ACCEPTANCE.md#controlled-live-github-publication)
+posted one COMMENT review and one inline finding, then recovered its persisted
+partial state and repeated verified readback without another write. Lost-response,
+true-partial repair and changing-evidence paths have separate owned Git/HTTP
+coverage; the live check does not claim those failures were induced on GitHub.

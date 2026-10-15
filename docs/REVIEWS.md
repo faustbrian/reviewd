@@ -1,11 +1,11 @@
 # Private reviews and exact previews
 
-The development version currently supports manual private preparation, a
-durable run inbox and exact preview. Explicit publication and reconciliation
-are described in [publication and recovery](PUBLICATION.md). The automatic
-watcher is described in [foreground watching](WATCHING.md); notifications and
-terminal UI are not available yet. A prepared review is not
-a posted review or formal GitHub approval.
+Manual private preparation, a durable run inbox and exact previews share the
+same application services as the automatic watcher. Explicit publication and
+reconciliation are described in [publication and recovery](PUBLICATION.md).
+The [watcher](WATCHING.md), [notifications](NOTIFICATIONS.md) and optional
+[terminal inbox](TERMINAL.md) are available. A prepared review is not a posted
+review or formal GitHub approval.
 
 ## Commands
 
@@ -126,8 +126,8 @@ Directories must be private (0700), and the database a private regular file
 constraints retain queued/waiting, reviewing, prepared and failed/cancelled
 states across independent clients. Exact-payload publication claims and unknown
 outcomes are distinct stored states. Explicit publication persists attempts
-before writes and verifies remote identities; real GitHub acceptance remains
-outstanding.
+before writes and verifies remote identities. The controlled live publication
+and repeated readback are recorded in [acceptance evidence](ACCEPTANCE.md#controlled-live-github-publication).
 
 A run retains frozen configuration/provenance, relevant context/skill identity,
 review revisions, exact preview, available model/usage and thread/turn metadata.
