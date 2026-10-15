@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -62,11 +61,7 @@ func StartCommandRuntime(ctx context.Context, options CommandOptions) (_ *Comman
 	if executable == "" {
 		executable = "codex"
 	}
-	executable, err = exec.LookPath(executable)
-	if err != nil {
-		return nil, errors.New("Codex CLI is required for enforced feedback command isolation")
-	}
-	executable, err = filepath.Abs(executable)
+	executable, err = commandExecutable(ctx, executable)
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +89,9 @@ func StartCommandRuntime(ctx context.Context, options CommandOptions) (_ *Comman
 	// reads. Omit it: this named native profile denies host credentials by root.
 	var configuration strings.Builder
 	configuration.WriteString("approval_policy=\"never\"\ndefault_permissions=\"reviewd-feedback\"\n[permissions.reviewd-feedback.filesystem]\n\":root\"=\"deny\"\n\":minimal\"=\"read\"\n")
+	// The Linux sandbox's inner helper is this exact native file. Do not expose
+	// its parent installation, temporary directory, HOME or provider state.
+	fmt.Fprintf(&configuration, "%s=\"read\"\n", strconv.Quote(executable))
 	for _, path := range options.ReadRoots {
 		absolute, resolveErr := filepath.EvalSymlinks(path)
 		if resolveErr != nil {
@@ -103,7 +101,7 @@ func StartCommandRuntime(ctx context.Context, options CommandOptions) (_ *Comman
 		if resolveErr != nil || absolute == string(filepath.Separator) {
 			return nil, errors.New("feedback read grant cannot expose the host root")
 		}
-		if absolute == workspace {
+		if absolute == workspace || absolute == executable {
 			continue
 		}
 		fmt.Fprintf(&configuration, "%s=\"read\"\n", strconv.Quote(absolute))

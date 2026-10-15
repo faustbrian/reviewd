@@ -75,7 +75,11 @@ CI provisions that targeted profile on its disposable Ubuntu runners and still
 requires actual child execution, denied credential access, correct read/write
 boundaries and denied network access. It does not disable AppArmor or its
 host-wide user-namespace restriction. reviewd does not install packages or
-change a local machine's security policy.
+change a local machine's security policy. The command host resolves the selected
+standalone executable or official npm launcher to its canonical native binary,
+and grants read access to that exact file for Linux sandbox re-execution. It
+does not expose the installation parent or adjacent credentials. Unsupported
+custom launchers should select the standalone binary with `reviewer.executable`.
 
 Print completion for your shell without modifying its configuration:
 

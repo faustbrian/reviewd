@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -31,9 +32,20 @@ func TestCodexCapabilityBoundaryFeedbackCommands(t *testing.T) {
 	if err := os.Mkdir(workspace, 0700); err != nil {
 		t.Fatal(err)
 	}
-	git, err := exec.LookPath("git")
-	if err != nil {
-		t.Fatal("native Git prerequisite unavailable")
+	git := "/usr/bin/git"
+	if runtime.GOOS == "darwin" {
+		// /usr/bin/git is an xcrun shim which writes per-user discovery caches.
+		// Probe actual Git behavior, not shim/cache or arbitrary PATH discovery.
+		git = ""
+		for _, candidate := range []string{"/Library/Developer/CommandLineTools/usr/bin/git", "/Applications/Xcode.app/Contents/Developer/usr/bin/git"} {
+			if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0 {
+				git = candidate
+				break
+			}
+		}
+		if git == "" {
+			t.Fatal("native probe requires an installed Apple Git executable, not its /usr/bin/git discovery shim")
+		}
 	}
 	init := exec.Command(git, "-c", "init.defaultBranch=feedback", "init", workspace)
 	init.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
@@ -61,7 +73,7 @@ func TestCodexCapabilityBoundaryFeedbackCommands(t *testing.T) {
 		t.Fatalf("owned network fixture control failed: %v", err)
 	}
 	for _, writable := range []bool{false, true} {
-		host, err := StartCommandRuntime(ctx, CommandOptions{RuntimeOptions: RuntimeOptions{TempRoot: root}, Workspace: workspace, Writable: writable})
+		host, err := StartCommandRuntime(ctx, CommandOptions{RuntimeOptions: RuntimeOptions{TempRoot: root}, Workspace: workspace, Writable: writable, ReadRoots: []string{git}})
 		if err != nil {
 			t.Fatal(err)
 		}
