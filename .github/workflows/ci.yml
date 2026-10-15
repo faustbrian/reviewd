@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  REVIEWD_SETUP_GO_SHA: 924ae3a1cded613372ab5595356fb5720e22ba16
+
 jobs:
   quality:
     name: Quality (${{ matrix.os }})
@@ -18,7 +21,17 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+      # The release's SHA archive is unavailable; fetch the same pinned code
+      # through Git rather than rolling back its bundled security updates.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: actions/setup-go
+          ref: ${{ env.REVIEWD_SETUP_GO_SHA }}
+          path: .reviewd-ci/setup-go
+          persist-credentials: false
+      - name: Verify pinned Go setup action
+        run: test "$(git -C .reviewd-ci/setup-go rev-parse --verify 'HEAD^{commit}')" = "$REVIEWD_SETUP_GO_SHA"
+      - uses: ./.reviewd-ci/setup-go
         with:
           go-version-file: go.mod
           cache: false
@@ -62,7 +75,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: actions/setup-go
+          ref: ${{ env.REVIEWD_SETUP_GO_SHA }}
+          path: .reviewd-ci/setup-go
+          persist-credentials: false
+      - name: Verify pinned Go setup action
+        run: test "$(git -C .reviewd-ci/setup-go rev-parse --verify 'HEAD^{commit}')" = "$REVIEWD_SETUP_GO_SHA"
+      - uses: ./.reviewd-ci/setup-go
         with:
           go-version-file: go.mod
           cache: false
