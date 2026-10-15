@@ -59,6 +59,31 @@ or cleanup failure retains private storage rather than claiming clean shutdown.
 The shared owner gates service teardown as well: source and frozen skill inputs
 are not independently deleted while a primary or specialist child is unresolved.
 
+### Linux feedback command completion
+
+Feedback command hosts validate the selected native Codex **0.162.1** before
+dispatching checkout commands and explicitly disable legacy Landlock mode.
+Restricted Linux execution uses its PID-namespace backend. Each command has a
+connection-scoped control identity; cancellation requests termination but keeps
+the original execution response correlated until its terminal exit/output facts
+arrive. A terminate acknowledgement alone does not release capture or cleanup.
+Nonzero exit remains a completed execution, not a passing verification.
+
+Before dispatch, Linux commands reserve an unresolved slot in the existing
+private owner. Only canonical completion clears it. Missing, malformed or lost
+terminal facts retain the runtime, workspace and owner across restart, even when
+the app-server process group is absent. Recovery reports `resources_pending`
+and preserves feedback effects rather than permitting a replacement modifier.
+This requires no new state migration; older clients also retain unresolved slots.
+
+An unacknowledged command cannot currently be reconciled merely by observing or
+stopping the old server group. Do not delete its private scope or treat another
+recovery pass as proof of completion. Automatic reclamation of that ambiguous
+command scope is not implemented. The modifying feedback workflow is still
+disconnected; the selected container-backed macOS command backend is not yet
+implemented. These Linux changes do not certify macOS feedback-command shutdown or
+change the read-only reviewer's capabilities and context lifetime.
+
 ## Classification
 
 | Report state | Meaning and effect |
@@ -66,7 +91,7 @@ are not independently deleted while a primary or specialist child is unresolved.
 | `live` | The stable lease is held; leave its work and resources alone. This may be another maintenance contender, not proof of an active model turn. |
 | `recovered` | Proven owner loss or acknowledged shutdown; interrupted private work becomes failed/cancelled/stale according to its retained stop cause, and safely stopped owned storage is reclaimed. In dry-run output this is the proposed action only. |
 | `already_recovered` | Another client completed the observed cleanup; no new action is needed. |
-| `resources_pending` | The owner stopped, but a child group is live, a launch is unresolved or inspection is unavailable. Retain the scope; do not signal the saved group. |
+| `resources_pending` | The owner stopped, but a child group is live, a launch or command completion is unresolved, or inspection is unavailable. Retain the scope; do not signal the saved group. |
 | `unknown` / `unknown_runs` | Ownership/liveness cannot be established, including legacy active runs. Preserve state and storage and require operator attention. |
 | `recovery_failed` | Persistence failed; do not interpret the attempted recovery as a completed state transition. |
 

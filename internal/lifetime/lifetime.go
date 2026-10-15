@@ -43,6 +43,17 @@ func Root(ctx context.Context, fallback string) string {
 	return fallback
 }
 
+// PendingCompletion reuses the owner's unresolved-launch slot for execution
+// whose lifetime cannot be inferred from its server's process group. Do not
+// assign a group with Started: only a canonical terminal acknowledgement may
+// Finish this slot. A lost acknowledgement deliberately survives recovery.
+func PendingCompletion(ctx context.Context) (Process, error) {
+	if scope, ok := ctx.Value(scopeKey{}).(Scope); ok && scope.Tracker != nil {
+		return scope.Tracker.Starting(ctx)
+	}
+	return nil, nil
+}
+
 // Start records an unresolved launch before fork. A crash between fork and
 // registration therefore retains the scope instead of treating it as empty.
 func Start(ctx context.Context, command *exec.Cmd) (Process, error) {

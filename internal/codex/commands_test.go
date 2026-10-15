@@ -200,18 +200,23 @@ func TestFeedbackCommandInitializationPreservesRuntimeOwnedRetention(t *testing.
 	pidPath := filepath.Join(root, "owned.pid")
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 	executable := filepath.Join(tools, "reject-init")
-	script := "#!/bin/sh\necho $$ > " + quote(pidPath) + "\nprintf 'invalid-json\\n'\nexec /bin/sleep 60\n"
+	script := "#!/bin/sh\nif test \"$1\" = --version; then echo 'codex-cli 0.162.1'; exit 0; fi\necho $$ > " + quote(pidPath) + "\nprintf 'invalid-json\\n'\nexec /bin/sleep 60\n"
 	if err := os.WriteFile(executable, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(tools, "ps"), []byte("#!/bin/sh\nprintf 'invalid-metadata\\n'\n"), 0700); err != nil {
+	actualPS, err := exec.LookPath("ps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspection := "#!/bin/sh\nif test -f " + quote(pidPath) + "; then printf 'invalid-metadata\\n'; else exec " + quote(actualPS) + " \"$@\"; fi\n"
+	if err := os.WriteFile(filepath.Join(tools, "ps"), []byte(inspection), 0700); err != nil {
 		t.Fatal(err)
 	}
 	originalPath := os.Getenv("PATH")
 	t.Setenv("PATH", tools+string(os.PathListSeparator)+originalPath)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_, err := StartCommandRuntime(ctx, CommandOptions{RuntimeOptions: RuntimeOptions{Executable: executable, TempRoot: storage}, Workspace: workspace})
+	_, err = StartCommandRuntime(ctx, CommandOptions{RuntimeOptions: RuntimeOptions{Executable: executable, TempRoot: storage}, Workspace: workspace})
 	// The error path must terminate/reap its actual owned child, but a failed
 	// metadata proof still retains the root until independent reconciliation.
 	t.Setenv("PATH", originalPath)

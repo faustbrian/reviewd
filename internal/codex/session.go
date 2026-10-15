@@ -90,13 +90,21 @@ func StartRuntime(ctx context.Context, options RuntimeOptions) (runtime *Runtime
 // startServer shares transport and proven process ownership, not capabilities.
 // Callers supply an app-created private configuration and sealed environment.
 func startServer(ctx context.Context, executable string, isolation *Isolation, environment []string) (runtime *Runtime, err error) {
+	return startServerContext(ctx, ctx, executable, isolation, environment)
+}
+
+// Command hosts may keep process lifetime separate from an individual caller's
+// cancellation so canonical exit can arrive. Reviewers retain their original
+// shared initialization/lifetime context through startServer above.
+func startServerContext(ctx, processContext context.Context, executable string, isolation *Isolation, environment []string, overrides ...string) (runtime *Runtime, err error) {
 	owned := &Runtime{isolation: isolation, wait: make(chan error, 1), stop: make(chan struct{})}
 	defer func() {
 		if err != nil && !errors.Is(err, lifetime.ErrCleanupUncertain) {
 			err = errors.Join(err, owned.Close())
 		}
 	}()
-	command := exec.CommandContext(ctx, executable, WorkerArgs()...)
+	arguments := append(WorkerArgs(), overrides...)
+	command := exec.CommandContext(processContext, executable, arguments...)
 	command.Dir = isolation.Workspace
 	command.Env = environment
 	configureProcess(command)
@@ -127,7 +135,7 @@ func startServer(ctx context.Context, executable string, isolation *Isolation, e
 	parent := lifetime.Observe(command)
 	go func() {
 		select {
-		case <-ctx.Done():
+		case <-processContext.Done():
 			owned.requestStop()
 		case <-owned.stop:
 		}
@@ -531,6 +539,10 @@ func (r *Runtime) delegate(ctx context.Context, request ReviewRequest, args json
 	return output.Text, err
 }
 func (r *Runtime) Close() error {
+	return r.close(false)
+}
+
+func (r *Runtime) close(retain bool) error {
 	r.closeOnce.Do(func() {
 		if r.Client != nil {
 			_ = r.Client.Close()
@@ -551,6 +563,10 @@ func (r *Runtime) Close() error {
 			}
 		}
 		if r.isolation != nil {
+			if retain {
+				r.closeError = lifetime.ErrCleanupUncertain
+				return
+			}
 			if err := lifetime.Finish(r.process); err != nil {
 				r.closeError = err
 				return

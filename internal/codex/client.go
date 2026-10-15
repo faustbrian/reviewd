@@ -179,6 +179,12 @@ func (c *Client) RejectContext(ctx context.Context, id json.RawMessage, err *RPC
 }
 
 func (c *Client) Call(ctx context.Context, method string, params any, result any) error {
+	return c.call(ctx, method, params, result, nil)
+}
+
+// onSent establishes ordering for connection-scoped command controls. It does
+// not acknowledge server dispatch or command completion.
+func (c *Client) call(ctx context.Context, method string, params any, result any, onSent func()) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -222,6 +228,9 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 		return ctx.Err()
 	case <-c.done:
 		return finishTerminal(c.Err())
+	}
+	if onSent != nil {
+		onSent()
 	}
 	select {
 	case message := <-receiver:
