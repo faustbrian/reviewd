@@ -69,11 +69,11 @@ func decodeInput(event Message, participant string) (clarification.Request, erro
 }
 
 type inputJob struct {
-	request         clarification.Request
-	event           Message
-	ctx             context.Context
-	cancel          context.CancelFunc
-	written, closed bool
+	request                  clarification.Request
+	event                    Message
+	ctx                      context.Context
+	cancel                   context.CancelFunc
+	writing, written, closed bool
 }
 type inputResult struct {
 	job     *inputJob
@@ -189,27 +189,37 @@ func (w *inputWaits) result(ctx context.Context, result inputResult) error {
 	if err := clarification.ValidateAnswers(j.request.Questions, result.answer); err != nil {
 		return err
 	}
+	j.writing = true
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
+		// Answer selection may wait indefinitely for the operator, but a selected
+		// answer's transport write must settle within a bounded shutdown window.
+		writeContext, cancel := context.WithTimeout(j.ctx, 3*time.Second)
+		defer cancel()
 		var response any = result.answer
 		if j.request.Transport == "dynamic" {
 			raw, _ := json.Marshal(result.answer)
 			response = map[string]any{"contentItems": []map[string]string{{"type": "inputText", "text": string(raw)}}, "success": true}
 		}
-		err := w.client.ReplyContext(j.ctx, j.event.ID, response)
+		err := w.client.ReplyContext(writeContext, j.event.ID, response)
 		w.done <- inputResult{job: j, writing: true, err: err}
 	}()
 	return nil
 }
 func (w *inputWaits) finish(reason string) error {
+	for _, j := range w.all {
+		// A matching completed turn can arrive after the peer consumed a full
+		// reply but before its local write receipt. Do not cancel that receipt.
+		// Explicit clears, errors and unanswered requests remain fail-closed.
+		if reason != "turn_completed" || !j.writing || j.closed {
+			j.cancel()
+		}
+	}
+	w.wg.Wait()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	var errs []error
-	for _, j := range w.all {
-		j.cancel()
-	}
-	w.wg.Wait()
 	// A peer can finish immediately after reading the reply, before the writer
 	// goroutine has queued its completion. Join then record writes before close.
 	for {

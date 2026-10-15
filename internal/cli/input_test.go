@@ -124,6 +124,9 @@ func TestPrivateClarificationWaitsForExplicitSecondClientAnswer(t *testing.T) {
 			if err != nil || current.State != store.Prepared {
 				t.Fatalf("answer did not produce private prepared result: %s %v", current.State, err)
 			}
+			if len(current.Inputs) != 1 || current.Inputs[0].ID != inputID || current.Inputs[0].State != "closed" || current.Inputs[0].SelectedAt == "" || current.Inputs[0].WrittenAt == "" || current.Inputs[0].ClosedAt == "" {
+				t.Fatal("prepared result omitted the exact input's selected, written or closed facts")
+			}
 			if strings.Contains(output.String()+diagnostic.String()+answered.String()+errors.String(), "private-answer-canary") {
 				t.Fatal("private answer leaked into ambient output")
 			}
