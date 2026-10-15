@@ -80,25 +80,41 @@ type Store struct {
 }
 
 func Open(ctx context.Context, directory string) (store *Store, err error) {
+	return open(ctx, directory, true)
+}
+
+// OpenExisting reopens authoritative ownership state without manufacturing an
+// empty database when a referenced profile has been moved or removed.
+func OpenExisting(ctx context.Context, directory string) (*Store, error) {
+	return open(ctx, directory, false)
+}
+
+func (s *Store) Directory() string { return s.directory }
+
+func open(ctx context.Context, directory string, create bool) (store *Store, err error) {
 	directory, err = filepath.Abs(directory)
 	if err != nil {
 		return nil, errors.New("invalid local state directory")
 	}
-	if err = os.MkdirAll(directory, 0700); err != nil {
-		return nil, errors.New("cannot create private local state directory")
+	if create {
+		if err = os.MkdirAll(directory, 0700); err != nil {
+			return nil, errors.New("cannot create private local state directory")
+		}
 	}
 	info, err := os.Lstat(directory)
 	if err != nil || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
 		return nil, errors.New("state.directory must be a private directory (mode 0700), not a symlink; choose a private profile location")
 	}
 	path := filepath.Join(directory, "reviewd.sqlite")
-	file, createErr := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
-	if createErr == nil {
-		if err = file.Close(); err != nil {
-			return nil, errors.New("cannot initialize private state database")
+	if create {
+		file, createErr := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+		if createErr == nil {
+			if err = file.Close(); err != nil {
+				return nil, errors.New("cannot initialize private state database")
+			}
+		} else if !errors.Is(createErr, os.ErrExist) {
+			return nil, errors.New("cannot create private state database")
 		}
-	} else if !errors.Is(createErr, os.ErrExist) {
-		return nil, errors.New("cannot create private state database")
 	}
 	info, err = os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
@@ -106,6 +122,9 @@ func Open(ctx context.Context, directory string) (store *Store, err error) {
 	}
 	location := url.URL{Scheme: "file", Path: path}
 	query := url.Values{}
+	if !create {
+		query.Set("mode", "rw")
+	}
 	query.Add("_pragma", "busy_timeout(5000)")
 	query.Add("_pragma", "foreign_keys(1)")
 	query.Add("_pragma", "journal_mode(WAL)")

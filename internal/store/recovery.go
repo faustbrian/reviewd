@@ -41,6 +41,53 @@ func (r RecoveryReport) NeedsAttention() bool {
 	return false
 }
 
+// ReconcilePrivateOwner uses the existing lease/process/closing-barrier owner,
+// scoped to one durable identity. Cross-profile admission must not infer child
+// death from its separate admission lock being free or from a stored PID.
+func (s *Store) ReconcilePrivateOwner(ctx context.Context, id string) (RecoveredOwner, error) {
+	unknown := RecoveredOwner{ID: id, State: "unknown", RunIDs: []string{}}
+	if !ownerIDPattern.MatchString(id) {
+		return unknown, errors.New("invalid private owner identity")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	result, err := s.recoverPrivateOwner(ctx, id, "", false)
+	if err != nil || result.State != "already_recovered" {
+		return result, err
+	}
+	// The row may be absent after another cleaner acknowledged shutdown.
+	// Require its durable closure fact; absent metadata alone proves nothing.
+	rows, err := s.db.QueryContext(ctx, `SELECT id,COALESCE(json_extract(record,'$.owner_closed'),0) FROM runs WHERE json_extract(record,'$.owner_id')=?`, id)
+	if err != nil {
+		return unknown, err
+	}
+	closed := true
+	for rows.Next() {
+		var runID string
+		var ownerClosed bool
+		if err = rows.Scan(&runID, &ownerClosed); err != nil {
+			break
+		}
+		unknown.RunIDs = append(unknown.RunIDs, runID)
+		closed = closed && ownerClosed
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return unknown, err
+	}
+	if len(unknown.RunIDs) == 0 || !closed {
+		return unknown, nil
+	}
+	if err = s.failLostOwner(ctx, id); err != nil {
+		return unknown, err
+	}
+	unknown.State = "already_recovered"
+	return unknown, nil
+}
+
 // RecoverPrivate never resumes a thread, starts a review or signals a saved
 // PID/group. The owner lease proves death; group metadata can only prevent
 // deletion. A reused group number therefore preserves, rather than harms, it.
