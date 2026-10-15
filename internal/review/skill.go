@@ -13,12 +13,13 @@ import (
 )
 
 type CapturedSkill struct {
-	Identity  SkillIdentity
-	Path      string
-	Documents map[string]string
-	root      string
-	closeOnce sync.Once
-	closeErr  error
+	Identity         SkillIdentity
+	Path             string
+	Documents        map[string]string
+	root             string
+	closeOnce        sync.Once
+	closeErr         error
+	feedbackCommands bool
 }
 
 func (s *CapturedSkill) Close() error {
@@ -75,7 +76,7 @@ func captureSkill(name, path, parent, qaPath string, packageLimit int, byteLimit
 		return nil, errors.New("could not create private frozen skill storage")
 	}
 	primaryDirectory := filepath.Base(installed)
-	capture = &CapturedSkill{root: root, Path: filepath.Join(root, primaryDirectory, "SKILL.md"), Documents: map[string]string{}}
+	capture = &CapturedSkill{root: root, Path: filepath.Join(root, primaryDirectory, "SKILL.md"), Documents: map[string]string{}, feedbackCommands: qaPath != ""}
 	owned := capture
 	defer func() {
 		if err != nil {

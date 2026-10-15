@@ -23,8 +23,9 @@ type Options struct {
 	Endpoint, Image, Workspace string
 	Helper, HelperSHA256       string
 	Writable                   bool
+	InstructionsRoot           string
 }
-type Environment struct{ OS, Architecture, Image, Workspace string }
+type Environment struct{ OS, Architecture, Image, Workspace, Instructions string }
 type activeCommand struct {
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -83,10 +84,22 @@ func New(ctx context.Context, owner *store.PrivateOwner, options Options) (*Host
 		return nil, err
 	}
 	options.Workspace = workspace
+	if options.InstructionsRoot != "" {
+		instructions, resolveErr := filepath.EvalSymlinks(options.InstructionsRoot)
+		info, statErr := os.Lstat(options.InstructionsRoot)
+		if resolveErr != nil || statErr != nil || instructions != options.InstructionsRoot || filepath.Dir(instructions) != root || !strings.HasPrefix(filepath.Base(instructions), "reviewd-skill-") || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
+			_ = client.Close()
+			return nil, errors.New("instructions must be this owner's exact private frozen bundle")
+		}
+	}
 	return &Host{owner: owner, options: options, client: client, identity: identity, helper: helper}, nil
 }
 func (h *Host) Environment() Environment {
-	return Environment{OS: "linux", Architecture: h.identity.Architecture, Image: h.options.Image, Workspace: "/workspace"}
+	environment := Environment{OS: "linux", Architecture: h.identity.Architecture, Image: h.options.Image, Workspace: "/workspace"}
+	if h.options.InstructionsRoot != "" {
+		environment.Instructions = containerapi.InstructionDirectory
+	}
+	return environment
 }
 
 func validCommand(argv []string, timeout time.Duration) bool {
@@ -193,7 +206,7 @@ func (h *Host) Run(ctx context.Context, argv []string, timeout time.Duration) (r
 	if err != nil {
 		return result, err
 	}
-	id, createErr := h.client.Create(operation, reference, containerapi.CommandSpec{Image: h.options.Image, Workspace: h.options.Workspace, Helper: h.helper, Capture: capture, Key: key, Argv: append([]string{}, argv...), Writable: h.options.Writable})
+	id, createErr := h.client.Create(operation, reference, containerapi.CommandSpec{Image: h.options.Image, Workspace: h.options.Workspace, Helper: h.helper, Capture: capture, Key: key, Argv: append([]string{}, argv...), Writable: h.options.Writable, Instructions: h.options.InstructionsRoot})
 	if id != "" {
 		reference.ContainerID = id
 		binding, stop := context.WithTimeout(context.Background(), 15*time.Second)

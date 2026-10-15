@@ -28,7 +28,10 @@ type CommandSpec struct {
 	Writable        bool
 	Helper, Capture string
 	Key             []byte
+	Instructions    string
 }
+
+const InstructionDirectory = "/reviewd-instructions"
 
 func (c *Client) commandRequest(ctx context.Context, method, path string, value any, limit int, wait bool) (int, []byte, error) {
 	var body io.Reader
@@ -206,6 +209,12 @@ func (c *Client) create(ctx context.Context, resource Resource, spec CommandSpec
 	if len(spec.Key) != 32 || captureErr != nil || helperErr != nil || !filepath.IsAbs(spec.Capture) || filepath.Clean(spec.Capture) != spec.Capture || !captureInfo.IsDir() || captureInfo.Mode().Perm()&0077 != 0 || !filepath.IsAbs(spec.Helper) || filepath.Clean(spec.Helper) != spec.Helper || !helperInfo.Mode().IsRegular() || helperInfo.Mode().Perm()&0022 != 0 || helperInfo.Mode().Perm()&0111 == 0 {
 		return "", ErrUncertain
 	}
+	if spec.Instructions != "" {
+		info, err := os.Lstat(spec.Instructions)
+		if err != nil || !filepath.IsAbs(spec.Instructions) || filepath.Clean(spec.Instructions) != spec.Instructions || !info.IsDir() || info.Mode().Perm()&0077 != 0 || filepath.Dir(spec.Instructions) != filepath.Dir(spec.Workspace) || !strings.HasPrefix(filepath.Base(spec.Instructions), "reviewd-skill-") {
+			return "", ErrUncertain
+		}
+	}
 	identity, err := c.expectedIdentity(ctx, resource)
 	if err != nil {
 		return "", err
@@ -237,6 +246,11 @@ func (c *Client) create(ctx context.Context, resource Resource, spec CommandSpec
 			"Mounts":    []map[string]any{{"Type": "bind", "Source": spec.Workspace, "Target": "/workspace", "ReadOnly": !spec.Writable}, {"Type": "bind", "Source": spec.Helper, "Target": commandcapture.GuestHelper, "ReadOnly": true}, {"Type": "bind", "Source": spec.Capture, "Target": commandcapture.GuestDirectory, "ReadOnly": false}},
 			"LogConfig": map[string]any{"Type": "none", "Config": map[string]string{}},
 		},
+	}
+	if spec.Instructions != "" {
+		host := request["HostConfig"].(map[string]any)
+		host["Mounts"] = append(host["Mounts"].([]map[string]any), map[string]any{"Type": "bind", "Source": spec.Instructions, "Target": InstructionDirectory, "ReadOnly": true})
+		request["Env"] = append(request["Env"].([]string), "REVIEWD_INSTRUCTIONS_PATH="+InstructionDirectory, "PYTHONDONTWRITEBYTECODE=1")
 	}
 	query := url.Values{"name": {resource.Name()}, "platform": {"linux/" + identity.Architecture}}
 	status, data, err := c.commandRequest(ctx, http.MethodPost, "/v"+apiVersion+"/containers/create?"+query.Encode(), request, maxResponse, false)

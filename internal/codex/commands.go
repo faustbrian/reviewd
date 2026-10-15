@@ -22,9 +22,10 @@ import (
 // borrowed by this command-only server and no model turn is available here.
 type CommandOptions struct {
 	RuntimeOptions
-	Workspace string
-	ReadRoots []string
-	Writable  bool
+	Workspace        string
+	ReadRoots        []string
+	Writable         bool
+	InstructionsRoot string
 }
 type CommandResult struct {
 	ExitCode int    `json:"exitCode"`
@@ -146,6 +147,10 @@ func StartCommandRuntime(ctx context.Context, options CommandOptions) (_ *Comman
 	fmt.Fprintf(&configuration, "[permissions.reviewd-feedback.network]\nenabled=false\n[shell_environment_policy]\ninherit=\"none\"\n[shell_environment_policy.set]\n")
 	path := os.Getenv("PATH")
 	env := map[string]string{"PATH": path, "HOME": workspace, "TMPDIR": filepath.Join(scratch, "tmp"), "GOCACHE": filepath.Join(scratch, "go-build"), "GOMODCACHE": filepath.Join(scratch, "go-modules"), "GOTMPDIR": filepath.Join(scratch, "tmp"), "GOPATH": filepath.Join(scratch, "go"), "GOWORK": "off", "GIT_OPTIONAL_LOCKS": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_TERMINAL_PROMPT": "0"}
+	if options.InstructionsRoot != "" {
+		env["REVIEWD_INSTRUCTIONS_PATH"] = options.InstructionsRoot
+		env["PYTHONDONTWRITEBYTECODE"] = "1"
+	}
 	for key, value := range env {
 		fmt.Fprintf(&configuration, "%s=%s\n", key, strconv.Quote(value))
 	}

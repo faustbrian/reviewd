@@ -239,8 +239,7 @@ Linux keeps its native command backend.
 
 `doctor` reports the optional macOS feedback dependency separately from ordinary
 review readiness. Its warning is not proof that a container, Git or project
-checks ran. The complete modifying executor remains disconnected as described
-below, even when these settings are supplied.
+checks ran. Missing container prerequisites hold only feedback execution.
 
 **Explicit manual permission:** `reviewd feedback <item-id>` previews the PR
 head, base, human-feedback inventory, selected feedback model/effort and full
@@ -253,17 +252,32 @@ The terminal's `h` choice and explicit `y` confirmation use the same decision.
 A changed head, base or human-feedback inventory requires a new preview.
 Existing linked runs require reconciliation rather than a replacement decision.
 
-**Current execution boundary:** discovery, manual permission and typed admission
-are available; the modifying executor is not connected.
-Automatic feedback items are held with a durable availability diagnostic in
-JSON/plain/terminal inboxes and notifications, never sent to the private
-reviewer. This hold does not count as synchronization failure or stop unrelated
-watching; genuine acquisition/storage failures retain their normal behavior.
-`reviewd start` continues to
-authorize private reviewing only and rejects this category. Manual permission
-queues work for a watcher but does not itself start a worker. Configuring `auto`
-does not currently perform fixes, commits, pushes, metadata changes, replies,
-thread resolution, or renewed reviewer requests.
+**Execution and continuation:** the typed watcher invokes a separate feedback
+service using the captured installed workflow and fresh configurable agents.
+It owns isolated repository commands, normal hooks, scoped SSH signing,
+additive existing-branch push, current-head checks, original replies, settled
+thread resolution and renewed reviewer requests. Repository commands receive
+no host credentials or network. Missing project tools/offline dependencies,
+unsupported signing policy or unavailable mandatory capabilities remain pending;
+private reviewing continues independently. `reviewd start` grants private review
+only. Manual feedback confirmation queues work; it does not start a worker.
+
+`reviewd feedback-resume <run-id>` previews continuation of the **same** retained
+run, owner, worktree and captured instructions. Its displayed `--confirm` value
+binds the current stored outcome; `--json` supports the same headless flow. The
+terminal uses `g` and a separate confirmation. Resume retains the original model,
+effort and operator configuration; it does not authorize replacements. Before
+delivery it starts a fresh primary agent and preserves the staged fix. After a
+recorded delivery attempt it checks canonical effects without another
+implementation agent, commit, push or repeated uncertain mutation. New human
+feedback, a changed head/configuration, unreviewed local work, unavailable
+canonical evidence or unresolved command lifetime leaves the run pending.
+Watcher polling/recovery never silently resumes pending modifications.
+
+The connected core is not a claim that every installed organization-specific
+workflow capability is implemented: additive label hygiene, native Linear
+linkage and exact proposed-metadata validation still require their applicable
+integration. Model prose and a successful push do not establish those outcomes.
 
 Without explicit author/action settings, existing own-PR feedback monitoring
 and private-review decisions keep their legacy semantics. On opting in, any

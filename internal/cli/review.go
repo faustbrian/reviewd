@@ -221,7 +221,11 @@ func (e *execution) presentRun(output io.Writer, run store.Run) error {
 		safe := redact(string(data))
 		return writeJSON(output, map[string]any{"schema_version": 1, "run": json.RawMessage(safe), "redacted": safe != string(data)})
 	}
-	fmt.Fprintf(output, "Review %s\nRepository: %q #%d\nState: %s\n", run.ID, redact(run.Repository), run.Number, run.State)
+	label := "Review"
+	if run.Purpose == "feedback" {
+		label = "Feedback"
+	}
+	fmt.Fprintf(output, "%s %s\nRepository: %q #%d\nState: %s\n", label, run.ID, redact(run.Repository), run.Number, run.State)
 	if run.CancellationRequested && run.State != store.Cancelled {
 		fmt.Fprintln(output, "Cancellation requested; the private worker has not yet confirmed that it stopped.")
 	}
@@ -248,7 +252,7 @@ func (e *execution) presentRun(output io.Writer, run store.Run) error {
 	if run.TurnID != "" {
 		fmt.Fprintf(output, "Turn: %q\n", redact(run.TurnID))
 	}
-	if run.State == store.Reviewing && run.Progress != "" {
+	if (run.State == store.Reviewing || run.State == store.HandlingFeedback) && run.Progress != "" {
 		fmt.Fprintf(output, "Activity: %s\n", terminalText(run.Progress))
 	}
 	var usage struct {
@@ -282,12 +286,19 @@ func (e *execution) presentRun(output io.Writer, run store.Run) error {
 	}
 	if json.Unmarshal(run.Configuration, &configuration) == nil {
 		var effort string
-		if json.Unmarshal(configuration.Values["reviewer.reasoning_effort"], &effort) == nil && effort != "" {
+		key := "reviewer.reasoning_effort"
+		if run.Purpose == "feedback" {
+			key = "feedback.reasoning_effort"
+		}
+		if json.Unmarshal(configuration.Values[key], &effort) == nil && effort != "" {
 			fmt.Fprintf(output, "Reasoning effort: %q\n", redact(effort))
 		}
 	}
 	if run.Failure != "" {
 		fmt.Fprintln(output, terminalText(run.Failure))
+	}
+	if run.Purpose == "feedback" {
+		return presentFeedbackOutcome(output, run)
 	}
 	if len(run.Outcome) > 0 {
 		var outcome review.PublicationOutcome

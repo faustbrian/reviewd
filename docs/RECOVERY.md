@@ -79,11 +79,9 @@ This requires no new state migration; older clients also retain unresolved slots
 An unacknowledged command cannot currently be reconciled merely by observing or
 stopping the old server group. Do not delete its private scope or treat another
 recovery pass as proof of completion. Automatic reclamation of that ambiguous
-command scope is not implemented. The modifying feedback workflow is still
-disconnected. The internal container command provider described below is wired
-to initial macOS checkout, but not feedback automation. These Linux changes do not certify
-macOS feedback-command shutdown or change the read-only reviewer's capabilities
-and context lifetime.
+command scope is not implemented. A feedback run with that ambiguity remains
+held; neither explicit continuation nor observing an absent server authorizes
+replacement or deletion. Read-only reviewers gain no repository-command grants.
 
 ### Daemon-owned container resources
 
@@ -167,9 +165,39 @@ names, transformed checkout bytes, unsupported paths/submodules, and trees over
 its separate existing 1-GiB bound. Native Linux checkout retains its backend and
 the same fidelity checks.
 
-This remains an internal checkout/provider boundary, not connected feedback
-automation. The installed feedback skill and its complete verification/delivery
-workflow remain unavailable; ordinary read-only review gains no command grants.
+The separate feedback service uses this checkout/command provider and captured
+installed instructions. Ordinary read-only review gains no command grants.
+
+### Explicit retained-feedback continuation
+
+Use `reviewd feedback-resume <run-id>` to inspect the existing run, then its
+displayed `--confirm` command to continue exactly that stored outcome. JSON and
+the terminal inbox use the same operation. Recovery itself does not run models,
+commands or remote mutations. The original owner, complete source, captured
+instructions and staged work remain; configuration/model changes are rejected.
+Setup failures before implementation retain the captured instructions and any
+successfully acquired immutable source. Explicit continuation completes missing
+acquisition or workspace preparation in the same owner; it does not rebuild an
+already adopted workspace or retry a command with unresolved shutdown.
+
+Before delivery, continuation uses a fresh primary agent and fresh verification
+of retained work. The original bounded planning inputs stay historical. After
+an attempted delivery, the original reviewed projection and effect journal
+remain authoritative: canonical remote reads may identify an accepted effect,
+but uncertain mutations are never repeated. Current-head checks can become
+ready without another commit/push; replies and reviewer requests not previously
+attempted can then finish. A fresh post-delivery audit precedes completion.
+New human feedback, unrelated source/local changes, altered retained evidence
+or unavailable canonical facts hold the same run for operator attention.
+
+Feedback execution journals are excluded from ordinary review-history expiry.
+Their recorded effects and handled revisions remain available for reconciliation
+and duplicate suppression, including failed/cancelled runs.
+Update and restart every client sharing a feedback profile before enabling this
+executor, or use a fresh profile. Older same-schema binaries do not contain this
+expiry guard and can erase failed/cancelled feedback facts; filesystem-resource
+retention alone does not protect those journals. Mixed-version operation and
+downgrades of an active feedback profile are not supported.
 
 ## Classification
 

@@ -38,8 +38,9 @@ func (s *Store) FinishFeedback(ctx context.Context, id string, state State, outc
 }
 
 // ResumeFeedback requires an explicit action and the observed outcome CAS.
-// The caller already holds the cross-profile PR modifier lease. A fresh owner
-// and fresh agent replace no prior identity; the execution history is retained.
+// The caller holds the cross-profile modifier and an owned execution lease:
+// either a fresh owner after proven closure, or the reopened original retained
+// owner. A fresh agent preserves the prior execution/effect history.
 func (s *Store) ResumeFeedback(ctx context.Context, observed Run, owner string) (bool, error) {
 	if observed.Purpose != "feedback" || (observed.State != FeedbackPending && observed.State != Partial) || !ownerIDPattern.MatchString(owner) {
 		return false, errors.New("only explicit pending/partial feedback work can resume")
@@ -50,7 +51,12 @@ func (s *Store) ResumeFeedback(ctx context.Context, observed Run, owner string) 
 		history = append(history, previous)
 	}
 	raw, _ := json.Marshal(history)
-	result, err := s.db.ExecContext(ctx, `UPDATE runs SET state='handling_feedback',thread_id=NULL,turn_id=NULL,record=json_set(record,'$.owner_id',?,'$.owner_closed',json('false'),'$.cancellation_requested',json('false'),'$.prior_executions',json(?)),updated_at=? WHERE id=? AND state=? AND COALESCE(outcome,'')=? AND json_extract(record,'$.purpose')='feedback' AND COALESCE(json_extract(record,'$.owner_closed'),0)=1 AND json_extract(record,'$.owner_id')=? AND COALESCE(thread_id,'')=? AND COALESCE(turn_id,'')=? AND EXISTS(SELECT 1 FROM private_owners WHERE id=? AND closing=0)`, owner, string(raw), timestamp(), observed.ID, observed.State, string(observed.Outcome), observed.OwnerID, observed.ThreadID, observed.TurnID, owner)
+	result, err := s.db.ExecContext(ctx, `UPDATE runs SET state='handling_feedback',thread_id=NULL,turn_id=NULL,record=json_set(record,'$.owner_id',?,'$.owner_closed',json('false'),'$.cancellation_requested',json('false'),'$.prior_executions',json(?)),updated_at=? WHERE id=? AND state=? AND COALESCE(outcome,'')=? AND json_extract(record,'$.purpose')='feedback'
+ AND (COALESCE(json_extract(record,'$.owner_closed'),0)=1 OR
+ (json_extract(record,'$.owner_id')=? AND EXISTS(
+ SELECT 1 FROM private_owners p,json_each(p.processes) resource WHERE p.id=? AND p.closing=0 AND resource.type='object'
+ AND json_extract(resource.value,'$.kind')='feedback_workspace' AND json_extract(resource.value,'$.owner_id')=p.id AND json_extract(resource.value,'$.run_id')=runs.id)))
+ AND json_extract(record,'$.owner_id')=? AND COALESCE(thread_id,'')=? AND COALESCE(turn_id,'')=? AND EXISTS(SELECT 1 FROM private_owners WHERE id=? AND closing=0)`, owner, string(raw), timestamp(), observed.ID, observed.State, string(observed.Outcome), owner, owner, observed.OwnerID, observed.ThreadID, observed.TurnID, owner)
 	if err != nil {
 		return false, errors.New("cannot claim explicit feedback reconciliation")
 	}

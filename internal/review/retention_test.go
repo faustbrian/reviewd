@@ -306,3 +306,48 @@ func TestRetentionProcessesBoundedBatchesWithoutDeletingWorkIdentity(t *testing.
 		}
 	}
 }
+
+func TestRetentionDoesNotDecodeFeedbackFactsAsReviewPublication(t *testing.T) {
+	for _, state := range []store.State{store.Failed, store.Cancelled} {
+		t.Run(string(state), func(t *testing.T) {
+			ctx := context.Background()
+			durable, err := store.Open(ctx, filepath.Join(t.TempDir(), "profile"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer durable.Close()
+			owner, err := durable.BeginPrivateOwner(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run, created, err := durable.Create(ctx, store.Run{Purpose: "feedback", OwnerID: owner.ID, Repository: "github.com/owner/repo", RepositoryID: 99, PullID: 700, Number: 17, ActorID: 43, ActorLogin: "author", WorkKey: "feedback-retention", State: store.Queued, Configuration: json.RawMessage(`{"feedback_authority":"frozen"}`), Context: json.RawMessage(`{"feedback_target":"original"}`)})
+			if err != nil || !created {
+				t.Fatal(err)
+			}
+			if claimed, err := durable.ClaimFeedback(ctx, run.ID); err != nil || !claimed {
+				t.Fatal(err)
+			}
+			if err := owner.Close(); err != nil {
+				t.Fatal(err)
+			}
+			journal := json.RawMessage(`{"schema_version":1,"execution":{"roles":[{"role":"correctness_reviewer","thread_id":"native-thread","text":"Private native report"}],"delivery":{"started":true,"complete":false,"effects":[{"kind":"reply","state":"unknown"}]}},"handled":[{"key":"review:8","revision":"immutable"}]}`)
+			if err := durable.FinishFeedback(ctx, run.ID, state, journal, "owned failure after ambiguous reply"); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				report, err := ExpireHistory(ctx, durable, 1, false, time.Now().Add(48*time.Hour))
+				if err != nil {
+					t.Fatal(err)
+				}
+				actual, err := durable.Get(ctx, run.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(report.Expired) != 0 || actual.Archive != nil || string(actual.Outcome) != string(journal) || string(actual.Configuration) != string(run.Configuration) || string(actual.Context) != string(run.Context) {
+					t.Fatal("review retention discarded feedback execution/replay evidence")
+				}
+
+			}
+		})
+	}
+}

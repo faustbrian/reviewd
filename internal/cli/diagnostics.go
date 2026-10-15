@@ -186,7 +186,7 @@ func (e *execution) diagnose(ctx context.Context, document *config.Document, pat
 			if scope.String("feedback.container_endpoint") == "" || scope.String("feedback.container_image") == "" {
 				correction = "Set feedback.container_endpoint and feedback.container_image in operator global or exact-project configuration. " + correction
 			}
-			report.Diagnostics = append(report.Diagnostics, Diagnostic{Check: "feedback command backend", Scope: policy(scope).Scope, Status: "warning", Message: "Modifying feedback execution is not connected in this build; its optional container dependency does not disable ordinary reviews. Container execution was not probed by doctor.", Correction: correction})
+			report.Diagnostics = append(report.Diagnostics, Diagnostic{Check: "feedback command backend", Scope: policy(scope).Scope, Status: "warning", Message: "Feedback repository commands require the optional container backend; missing prerequisites hold feedback without disabling ordinary reviews. Container execution and project checks were not probed by doctor.", Correction: correction})
 		}
 	}
 	report.Ready = true

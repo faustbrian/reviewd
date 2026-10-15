@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"github.com/faustbrian/reviewd/internal/commandcapture"
 	"net/http"
 	"os"
@@ -19,7 +20,22 @@ const fixtureImage = "sha256:ddddddddddddddddddddddddddddddddddddddddddddddddddd
 
 // The API peer is inert: no command, container or process is created.
 func TestContainerCommandLifecycleUsesOwnedRestrictedRequests(t *testing.T) {
+	for _, instructions := range []bool{false, true} {
+		t.Run(fmt.Sprint("instructions=", instructions), func(t *testing.T) { testContainerCommandLifecycleUsesOwnedRestrictedRequests(t, instructions) })
+	}
+}
+func testContainerCommandLifecycleUsesOwnedRestrictedRequests(t *testing.T, withInstructions bool) {
 	workspace := t.TempDir()
+	instructions := ""
+	if withInstructions {
+		instructions = filepath.Join(filepath.Dir(workspace), "reviewd-skill-fixture")
+		if err := os.Mkdir(instructions, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(instructions, "validator.py"), []byte("print('owned validator')\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := os.Chmod(workspace, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -76,10 +92,14 @@ func TestContainerCommandLifecycleUsesOwnedRestrictedRequests(t *testing.T) {
 			if request.User != strconv.Itoa(os.Getuid())+":"+strconv.Itoa(os.Getgid()) || request.HostConfig.LogConfig.Type != "none" || len(request.HostConfig.LogConfig.Config) != 0 {
 				t.Error("command did not retain private workspace ownership or disable daemon log retention")
 			}
-			if len(request.HostConfig.Mounts) != 3 || request.HostConfig.Mounts[0].Type != "bind" || request.HostConfig.Mounts[0].Source != workspace || request.HostConfig.Mounts[0].Target != "/workspace" || !request.HostConfig.Mounts[0].ReadOnly {
+			want := 3
+			if withInstructions {
+				want = 4
+			}
+			if len(request.HostConfig.Mounts) != want || request.HostConfig.Mounts[0].Type != "bind" || request.HostConfig.Mounts[0].Source != workspace || request.HostConfig.Mounts[0].Target != "/workspace" || !request.HostConfig.Mounts[0].ReadOnly {
 				t.Error("command omitted its read-only private workspace")
 			}
-			if len(request.HostConfig.Mounts) == 3 {
+			if len(request.HostConfig.Mounts) >= 3 {
 				grant := request.HostConfig.Mounts[1]
 				if grant.Source != helper || grant.Target != commandcapture.GuestHelper || !grant.ReadOnly {
 					t.Error("helper grant differs")
@@ -87,6 +107,12 @@ func TestContainerCommandLifecycleUsesOwnedRestrictedRequests(t *testing.T) {
 				grant = request.HostConfig.Mounts[2]
 				if grant.Source != capture || grant.Target != commandcapture.GuestDirectory || grant.ReadOnly {
 					t.Error("private capture grant differs")
+				}
+			}
+			if withInstructions && len(request.HostConfig.Mounts) == 4 {
+				grant := request.HostConfig.Mounts[3]
+				if grant.Type != "bind" || grant.Source != instructions || grant.Target != "/reviewd-instructions" || !grant.ReadOnly {
+					t.Error("captured instructions require one exact read-only grant, never its parent")
 				}
 			}
 			hasKey := false
@@ -147,7 +173,7 @@ func TestContainerCommandLifecycleUsesOwnedRestrictedRequests(t *testing.T) {
 	defer cancel()
 	resource := ownedResource(endpoint)
 	resource.ContainerID = ""
-	id, err := client.Create(ctx, resource, CommandSpec{Image: fixtureImage, Workspace: workspace, Helper: helper, Capture: capture, Key: key, Argv: []string{"printf", "hello space"}})
+	id, err := client.Create(ctx, resource, CommandSpec{Image: fixtureImage, Workspace: workspace, Helper: helper, Capture: capture, Key: key, Instructions: instructions, Argv: []string{"printf", "hello space"}})
 	if err != nil || id != containerID || !created.Load() {
 		t.Fatalf("restricted owned command was not created: %s %v", id, err)
 	}

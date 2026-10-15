@@ -36,7 +36,7 @@ def main():
         commands.append(["go", "test", "./internal/codex", "-run",
                          "TestCodexCapabilityBoundary", "-count=1", "-v"])
         commands.append(["go", "test", "./internal/feedback", "-run",
-                         "TestCodexCapabilityFeedbackWorkspace", "-count=1", "-v"])
+                         "TestCodexCapabilityFeedbackWorkspace|TestCodexCapabilityFeedbackService", "-count=1", "-v"])
         commands.append(["go", "test", "./internal/cli", "-run",
                          "TestCodexCapabilityClarification", "-count=1", "-v"])
     results = []

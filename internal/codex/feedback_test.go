@@ -87,3 +87,60 @@ func TestFeedbackSessionUsesActualSkillAndOnlyGrantedScopedTools(t *testing.T) {
 	_ = client.Close()
 	<-peerDone
 }
+
+func TestIndependentFeedbackRoleCannotGrantCommandOrPrimaryStatus(t *testing.T) {
+	for _, variant := range []string{"command", "primary-status", "unknown-role"} {
+		t.Run(variant, func(t *testing.T) {
+			left, right := net.Pipe()
+			client := NewClient(left, left)
+			defer client.Close()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				defer right.Close()
+				dec, enc := json.NewDecoder(right), json.NewEncoder(right)
+				for {
+					var req Message
+					if dec.Decode(&req) != nil {
+						return
+					}
+					if req.Method != "model/list" {
+						t.Error("invalid independent role reached native session creation", req.Method)
+						return
+					}
+					raw, _ := json.Marshal(map[string]any{"data": []any{map[string]any{"model": "gpt-6.1-sol", "supportedReasoningEfforts": []any{map[string]string{"reasoningEffort": "high"}}}}, "nextCursor": nil})
+					_ = enc.Encode(Message{ID: req.ID, Result: raw})
+				}
+			}()
+			root := t.TempDir()
+			skill := filepath.Join(root, "SKILL.md")
+			if err := os.WriteFile(skill, []byte("---\nname: requesting-code-review\n---\nOwned instruction\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			tool := "reviewd_feedback_read_evidence"
+			role := "correctness_reviewer"
+			var status func(ReviewOutput) error
+			if variant == "command" {
+				tool = "reviewd_feedback_command"
+			}
+			if variant == "primary-status" {
+				status = func(ReviewOutput) error { return nil }
+			}
+			if variant == "unknown-role" {
+				role = "unbounded-supervisor"
+			}
+			runtime := &Runtime{Client: client, isolation: &Isolation{Workspace: root}}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err := runtime.HandleFeedback(ctx, FeedbackRequest{Role: role, Participant: "specialist", Model: "gpt-6.1-sol", Effort: "high", SkillName: "requesting-code-review", SkillPath: skill, OnStatus: status, Tools: []map[string]any{{"type": "function", "name": tool}}, Handle: func(context.Context, string, json.RawMessage) (string, error) {
+				t.Error("invalid role reached application tool")
+				return "", nil
+			}})
+			if err == nil {
+				t.Fatal("independent role gained a modifying/primary capability")
+			}
+			_ = client.Close()
+			<-done
+		})
+	}
+}

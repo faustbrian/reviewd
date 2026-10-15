@@ -34,7 +34,7 @@ func (r RecoveryReport) NeedsAttention() bool {
 		return true
 	}
 	for _, owner := range r.Owners {
-		if owner.State == "resources_pending" || owner.State == "unknown" || owner.State == "recovery_failed" {
+		if owner.State == "resources_pending" || owner.State == "feedback_pending" || owner.State == "unknown" || owner.State == "recovery_failed" {
 			return true
 		}
 	}
@@ -346,6 +346,9 @@ func (s *Store) recoverPrivateOwner(ctx context.Context, id, raw string, dry boo
 	if decodeErr != nil || !stopped {
 		result.State = "resources_pending"
 		result.Storage = root
+	} else if len(processes.workspaces) > 0 {
+		result.State = "feedback_pending"
+		result.Storage = root
 	}
 	if dry {
 		return result, nil
@@ -355,7 +358,7 @@ func (s *Store) recoverPrivateOwner(ctx context.Context, id, raw string, dry boo
 		result.Storage = root
 		return result, err
 	}
-	if result.State == "resources_pending" {
+	if result.State == "resources_pending" || result.State == "feedback_pending" {
 		return result, nil
 	}
 	if err = s.removePrivateRoot(ctx, id, root, raw, info); err != nil {

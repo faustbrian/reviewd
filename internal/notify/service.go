@@ -155,9 +155,26 @@ func (s *Service) Pump(ctx context.Context, document *config.Document, force boo
 		case store.Partial, store.PublicationUnknown:
 			body = "Publication needs reconciliation, not a blind retry; inspect reviewd show " + run.ID + "."
 		}
-		identity := fingerprint(string(run.State), run.PayloadID)
+		if run.Purpose == "feedback" {
+			body = ""
+			switch run.State {
+			case store.HandlingFeedback:
+				if len(run.Inputs) > 0 {
+					body = "Feedback handler asks for clarification; inspect reviewd inputs " + run.ID + ". No answer is selected automatically."
+				}
+			case store.FeedbackPending:
+				body = "Feedback handling is pending; inspect recorded work and effects with reviewd show " + run.ID + " before resuming."
+			case store.FeedbackDelivered:
+				body = "Feedback handling completed; inspect its actual effects with reviewd show " + run.ID + "."
+			case store.Partial:
+				body = "Feedback handling is partial; reconcile recorded effects rather than retrying blindly. Inspect reviewd show " + run.ID + "."
+			case store.Failed, store.Cancelled:
+				body = "Feedback handling needs attention; inspect work, shutdown and any delivered effects with reviewd show " + run.ID + "."
+			}
+		}
+		identity := fingerprint(run.Purpose, string(run.State), run.PayloadID)
 		if inputs := inputFingerprint(run); inputs != "" {
-			identity = fingerprint(string(run.State), run.PayloadID, inputs)
+			identity = fingerprint(run.Purpose, string(run.State), run.PayloadID, inputs)
 		}
 		add(store.Notification{Source: "run:" + run.ID, Repository: run.Repository, ActorID: run.ActorID,
 			PullID: run.PullID, Number: run.Number, Fingerprint: identity, Body: body}, body != "", run.CreatedAt)

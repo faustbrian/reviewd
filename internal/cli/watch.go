@@ -148,6 +148,7 @@ func (e *execution) watchCommand(deps Dependencies) *cobra.Command {
 			}
 			return nil
 		}}
+		engine.Feedback = e.feedbackExecutor(deps, durable, directory)
 		defer func() { resultErr = errors.Join(resultErr, engine.Close()) }()
 		var lastReloadError string
 		failures := 0

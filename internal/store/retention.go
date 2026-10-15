@@ -23,7 +23,10 @@ const RetentionBatchLimit = 25
 
 // Keep unresolved decisions, model work, input delivery and remote publication
 // evidence. An old terminal state alone is not proof that publication settled.
+// Feedback journals have a different schema and retain uncertain remote effects.
+// Ordinary review expiry must not reinterpret or discard their reconciliation facts.
 const retentionEligible = `state IN ('failed','cancelled','stale','published')
+ AND COALESCE(json_extract(record,'$.purpose'),'review')!='feedback'
  AND json_extract(record,'$.archive') IS NULL
  AND NOT EXISTS(SELECT 1 FROM input_requests q WHERE q.run_id=runs.id AND q.closed_at='')
  AND (state!='published' OR json_extract(outcome,'$.verified')=1)

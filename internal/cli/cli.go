@@ -18,10 +18,12 @@ import (
 
 	"github.com/faustbrian/reviewd/internal/codex"
 	"github.com/faustbrian/reviewd/internal/config"
+	"github.com/faustbrian/reviewd/internal/feedback"
 	"github.com/faustbrian/reviewd/internal/github"
 	"github.com/faustbrian/reviewd/internal/notify"
 	"github.com/faustbrian/reviewd/internal/review"
 	"github.com/faustbrian/reviewd/internal/source"
+	"github.com/faustbrian/reviewd/internal/store"
 	"github.com/spf13/cobra"
 )
 
@@ -33,14 +35,18 @@ type Diagnostic struct {
 	Correction string `json:"correction,omitempty"`
 }
 type Dependencies struct {
-	Version string
-	Input   io.Reader
-	Desktop notify.Sink
-	GitHub  func(context.Context, string) (*github.Client, error)
-	Codex   func(context.Context, []config.Snapshot) []Diagnostic
-	Review  func(context.Context, review.WorkerRequest) (codex.ReviewOutput, error)
-	Source  func(context.Context, github.Pull) (*source.Snapshot, error)
-	OpenURL func(context.Context, string) error
+	Version           string
+	Input             io.Reader
+	Desktop           notify.Sink
+	GitHub            func(context.Context, string) (*github.Client, error)
+	Codex             func(context.Context, []config.Snapshot) []Diagnostic
+	Review            func(context.Context, review.WorkerRequest) (codex.ReviewOutput, error)
+	Source            func(context.Context, github.Pull) (*source.Snapshot, error)
+	FeedbackAgent     func(context.Context, codex.RuntimeOptions, codex.FeedbackRequest) (codex.ReviewOutput, error)
+	FeedbackPrepare   func(context.Context, *store.PrivateOwner, *source.Snapshot, string, feedback.WorkspaceOptions) (*feedback.ExecutionResources, error)
+	FeedbackSource    func(context.Context, github.Pull, string) (*source.Snapshot, error)
+	FeedbackGitPolicy func(context.Context, string) (feedback.CommitPolicy, error)
+	OpenURL           func(context.Context, string) error
 }
 type commandError struct {
 	code    int
@@ -219,6 +225,7 @@ func Run(ctx context.Context, args []string, output, diagnostics io.Writer, deps
 	root.AddCommand(options.reviewCommand(deps), options.refreshCommand(deps), options.publishCommand(deps), options.showCommand(), options.inboxCommand(deps), options.syncCommand(deps), options.followCommand(true), options.followCommand(false), options.watchCommand(deps))
 	root.AddCommand(options.decisionCommand(true), options.decisionCommand(false), options.projectPauseCommand(true), options.projectPauseCommand(false), options.snoozeCommand(), options.unsnoozeCommand())
 	root.AddCommand(options.feedbackCommand())
+	root.AddCommand(options.feedbackResumeCommand(deps))
 	root.AddCommand(options.cancelCommand(), options.openCommand(deps), options.inputsCommand(), options.answerCommand())
 	root.AddCommand(options.cleanupCommand(), options.recoveryCommand())
 	completion := &cobra.Command{Use: "completion <bash|zsh|fish>", Short: "Print shell completion without installing it", Args: cobra.ExactArgs(1)}

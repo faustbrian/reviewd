@@ -122,6 +122,9 @@ type privateProcess struct {
 }
 
 func (o *PrivateOwner) Starting(ctx context.Context) (lifetime.Process, error) {
+	if _, err := o.lease.Info(); err != nil {
+		return nil, errors.New("private process owner lease is closed")
+	}
 	id, err := newID()
 	if err != nil {
 		return nil, err
@@ -155,6 +158,7 @@ func (p *privateProcess) Finished(ctx context.Context) error {
 type ownedResources struct {
 	groups     map[string]int
 	containers map[string]containerapi.Resource
+	workspaces map[string]ownedFeedbackWorkspace
 }
 type ownedContainer struct {
 	Kind     string                `json:"kind"`
@@ -162,7 +166,7 @@ type ownedContainer struct {
 }
 
 func decodeProcesses(raw, ownerID string) (ownedResources, error) {
-	resources := ownedResources{groups: map[string]int{}, containers: map[string]containerapi.Resource{}}
+	resources := ownedResources{groups: map[string]int{}, containers: map[string]containerapi.Resource{}, workspaces: map[string]ownedFeedbackWorkspace{}}
 	var entries map[string]json.RawMessage
 	if len(raw) > 1<<20 || json.Unmarshal([]byte(raw), &entries) != nil || entries == nil || len(entries) > 16 {
 		return resources, errors.New("invalid private resource ownership; resources retained")
@@ -177,6 +181,10 @@ func decodeProcesses(raw, ownerID string) (ownedResources, error) {
 				return resources, errors.New("invalid private process identity; resources retained")
 			}
 			resources.groups[id] = group
+			continue
+		}
+		if workspace, err := decodeFeedbackWorkspace(value, ownerID); err == nil {
+			resources.workspaces[id] = workspace
 			continue
 		}
 		reference, err := decodeContainer(value, ownerID, id)
@@ -223,6 +231,13 @@ func resourcesStopped(ctx context.Context, resources ownedResources) (bool, erro
 }
 
 func (s *Store) removePrivateRoot(ctx context.Context, id, root, observedProcesses string, info os.FileInfo) error {
+	resources, err := decodeProcesses(observedProcesses, id)
+	if err != nil {
+		return err
+	}
+	if len(resources.workspaces) > 0 {
+		return ErrFeedbackWorkspaceRetained
+	}
 	current, err := privateDirectory(root, false)
 	if errors.Is(err, os.ErrNotExist) {
 		return s.reconcileRemovedPrivateRoot(ctx, id, root)
@@ -294,6 +309,17 @@ func (s *Store) finishPrivateOwner(ctx context.Context, id string) error {
 // Close runs after worker teardown and gates all source/skill/runtime storage
 // cleanup. An ambiguous child retains the complete shared private scope.
 func (o *PrivateOwner) Close() error {
+	return o.finish(false)
+}
+
+// SuspendFeedback releases the existing owner lease after positive command
+// shutdown, but keeps the same durable owner and pending workspace. Recovery
+// must not interpret quiescence as permission to delete unfinished work.
+func (o *PrivateOwner) SuspendFeedback() error {
+	return o.finish(true)
+}
+
+func (o *PrivateOwner) finish(suspend bool) error {
 	o.once.Do(func() {
 		defer o.lease.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -315,6 +341,12 @@ func (o *PrivateOwner) Close() error {
 		}
 		if !stopped {
 			o.err = errors.New("private child lifetime is unresolved; storage retained for reviewd recover")
+			return
+		}
+		if suspend {
+			if len(processes.workspaces) == 0 {
+				o.err = errors.New("feedback suspension requires its durable retained workspace")
+			}
 			return
 		}
 		o.err = o.store.removePrivateRoot(ctx, o.ID, o.Root, raw, o.info)

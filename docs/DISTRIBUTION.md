@@ -71,8 +71,8 @@ application identity, then freezes its bytes inside the private owner. It never
 selects a repository/PATH helper or builds/downloads one during execution. A
 missing or mismatched companion holds container commands, not normal reviews.
 The helper is not a macOS host executable and should not be invoked directly.
-Full modifying feedback remains disconnected; installing the companion does not
-enable automation.
+Installing the companion does not itself enable automation; operator feedback
+author/action settings and complete command prerequisites are still required.
 Installation is an explicit operator action; reviewd never installs a service.
 macOS download policy may require the operator to allow an unsigned binary;
 these artifacts are not notarized. Linux builds target the Go toolchain's
@@ -82,8 +82,8 @@ distribution or kernel. See [Go's platform requirements](https://go.dev/wiki/Min
 Container-backed command execution additionally requires a local Linux container
 runtime whose kernel enables Landlock ABI 3 or newer and permits its system calls.
 The packaged helper checks enforcement before executing repository commands; an
-unsupported runtime does not fall back to host execution. This provider is not yet
-connected to the complete feedback workflow described in [recovery](RECOVERY.md).
+unsupported runtime does not fall back to host execution. See [recovery](RECOVERY.md)
+for retained-work continuation and unresolved-command restrictions.
 
 Native Linux command isolation additionally requires Bubblewrap and a host
 policy that permits its sandbox namespaces. On Ubuntu 24.04, install the

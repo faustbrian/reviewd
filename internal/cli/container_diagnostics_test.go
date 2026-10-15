@@ -51,7 +51,7 @@ func TestDoctorReportsMissingMacFeedbackBackendWithoutDisablingReviews(t *testin
 	}
 	for _, d := range report.Diagnostics {
 		if d.Check == "feedback command backend" {
-			if d.Status != "warning" || !strings.Contains(d.Correction, "feedback.container_endpoint") || !strings.Contains(d.Message, "not connected") {
+			if d.Status != "warning" || !strings.Contains(d.Correction, "feedback.container_endpoint") || !strings.Contains(d.Message, "not probed") {
 				t.Fatal("feedback availability was overstated or correction was not actionable")
 			}
 			return

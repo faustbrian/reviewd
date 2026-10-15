@@ -132,11 +132,11 @@ func AcquireModifier(ctx context.Context, directory string, key ModifierKey) (_ 
 	if err != nil {
 		return nil, err
 	}
-	if recovered.State != "recovered" && recovered.State != "already_recovered" {
+	if recovered.State != "recovered" && recovered.State != "already_recovered" && recovered.State != "feedback_pending" {
 		return nil, ErrModifierBusy
 	}
 	run, err = profile.Get(ctx, record.RunID)
-	if err != nil || !modifier.matches(run) || !run.OwnerClosed {
+	if err != nil || !modifier.matches(run) || (!run.OwnerClosed && recovered.State != "feedback_pending") {
 		return nil, ErrModifierBusy
 	}
 	modifier.Prior = &ModifierPrior{Profile: record.Profile, Run: run}

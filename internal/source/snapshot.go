@@ -173,6 +173,34 @@ func Acquire(ctx context.Context, options Options, boundary Boundary) (snapshot 
 	if _, err = r.run(ctx, nil, 1<<20, "fetch", "--no-tags", "--no-write-fetch-head", options.RemoteURL, boundary.TargetBaseSHA, "+refs/pull/"+strconv.Itoa(boundary.Number)+"/head:refs/reviewd/head"); err != nil {
 		return nil, err
 	}
+	return inspectSnapshot(ctx, r, boundary, snapshot)
+}
+
+// RetainedDirectory identifies app-owned immutable objects, not a new checkout.
+// The feedback owner must pin its filesystem identity before persisting it.
+func (s *Snapshot) RetainedDirectory() string { return s.root }
+
+// ReopenFeedbackSnapshot reads the same original source object storage. It
+// performs no fetch, checkout, hook, remote operation or source execution.
+func ReopenFeedbackSnapshot(ctx context.Context, ownerRoot, directory string, boundary Boundary) (*Snapshot, error) {
+	owner, err := filepath.EvalSymlinks(ownerRoot)
+	if err != nil {
+		return nil, err
+	}
+	canonical, err := filepath.EvalSymlinks(directory)
+	info, statErr := os.Lstat(directory)
+	if err != nil || statErr != nil || canonical != directory || filepath.Dir(directory) != owner || !strings.HasPrefix(filepath.Base(directory), "reviewd-source-") || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
+		return nil, errors.New("retained immutable source must be the original owner's private child")
+	}
+	if !objectID.MatchString(boundary.TargetBaseSHA) || !objectID.MatchString(boundary.HeadSHA) || boundary.Number < 1 || boundary.ChangedFiles < 0 {
+		return nil, errors.New("retained immutable source boundary is invalid")
+	}
+	snapshot := &Snapshot{TargetBaseSHA: boundary.TargetBaseSHA, HeadSHA: boundary.HeadSHA, root: directory, Sources: map[string]map[string]string{}, Manifests: map[string][]Entry{}}
+	r := runner{executable: "git", root: directory, env: append(GitEnvironment(os.Environ(), directory, ""), "GIT_ALLOW_PROTOCOL=never")}
+	return inspectSnapshot(ctx, r, boundary, snapshot)
+}
+
+func inspectSnapshot(ctx context.Context, r runner, boundary Boundary, snapshot *Snapshot) (*Snapshot, error) {
 	head, err := r.run(ctx, nil, 1<<20, "rev-parse", "--verify", "refs/reviewd/head^{commit}")
 	if err != nil {
 		return nil, err

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/faustbrian/reviewd/internal/config"
+	"github.com/faustbrian/reviewd/internal/feedback"
 	"github.com/faustbrian/reviewd/internal/store"
 	"github.com/faustbrian/reviewd/internal/terminal"
 	"github.com/spf13/cobra"
@@ -143,6 +144,15 @@ func (e *execution) terminalSnapshot(ctx context.Context, durable *store.Store, 
 			}
 		}
 		if run != nil {
+			entry.Purpose = run.Purpose
+			if run.Purpose == "feedback" {
+				entry.ExecutionKind = "feedback_v1"
+				entry.FeedbackResumeConfirmation = feedback.ResumeConfirmation(*run)
+				entry.Section = "feedback"
+				if entry.FeedbackResumeConfirmation != "" {
+					fmt.Fprintln(&text, "Use g to preview/confirm continuation of this SAME retained feedback run. Original model/effort remain frozen; uncertain effects are checked, never replayed.")
+				}
+			}
 			used[run.ID] = true
 			if item == nil {
 				entry.Key, entry.Project = "run:"+run.ID, run.Repository
@@ -157,6 +167,7 @@ func (e *execution) terminalSnapshot(ctx context.Context, durable *store.Store, 
 				prefix := "reviewer."
 				if run.Purpose == "feedback" {
 					prefix = "feedback."
+					entry.Model, entry.Effort = policy.String("feedback.model"), policy.String("feedback.reasoning_effort")
 				}
 				fmt.Fprintf(&text, "Frozen run model/effort: %s / %s\n", policy.String(prefix+"model"), policy.String(prefix+"reasoning_effort"))
 			}
@@ -166,10 +177,13 @@ func (e *execution) terminalSnapshot(ctx context.Context, durable *store.Store, 
 			}
 		}
 		switch entry.State {
-		case "queued", "reviewing", "waiting_checks", "retry_wait":
+		case "queued", "reviewing", "handling_feedback", "waiting_checks", "retry_wait":
 			entry.Section = "running"
 		case "prepared", "publishing", "published", "publication_unknown", "partial":
 			entry.Section = "publication"
+			if entry.Purpose == "feedback" {
+				entry.Section = "feedback"
+			}
 		}
 		entry.Paused = paused[entry.Project]
 		if entry.Paused {
@@ -199,7 +213,7 @@ func (e *execution) terminalSnapshot(ctx context.Context, durable *store.Store, 
 	}
 	for _, run := range runs {
 		for _, input := range run.Inputs {
-			if input.State != "pending" || run.State != store.Reviewing || run.CancellationRequested || run.Superseded {
+			if input.State != "pending" || (run.State != store.Reviewing && run.State != store.HandlingFeedback) || run.CancellationRequested || run.Superseded {
 				continue
 			}
 			var details strings.Builder
@@ -266,6 +280,12 @@ func terminalAction(ctx context.Context, base []string, action terminal.Action, 
 			args = append(args, "--reasoning-effort", action.Effort)
 		}
 		message = "Feedback permission queued for the displayed target; unavailable execution remains held. No delivery is implied."
+	case "feedback-resume":
+		if entry.Purpose != "feedback" || entry.RunID == "" || entry.FeedbackResumeConfirmation == "" {
+			return "", errors.New("select the exact retained feedback run for continuation")
+		}
+		args = []string{"feedback-resume", entry.RunID, "--confirm", entry.FeedbackResumeConfirmation}
+		message = "Feedback continuation returned; inspect the same run's actual recorded effects below."
 	case "publish", "repair":
 		if entry.RunID == "" || entry.PayloadID == "" {
 			return "", errors.New("select an exact prepared preview")
@@ -276,6 +296,9 @@ func terminalAction(ctx context.Context, base []string, action terminal.Action, 
 		}
 		message = "Publication operation returned; inspect the actual durable GitHub outcome below."
 	case "reconcile":
+		if entry.Purpose == "feedback" {
+			return "", errors.New("feedback requires its separate same-run continuation confirmation")
+		}
 		if entry.RunID == "" || entry.State == "prepared" {
 			return "", errors.New("select an existing submitted/unknown publication; use v for private check refresh")
 		}

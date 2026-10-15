@@ -32,7 +32,8 @@ func (s *Store) NotificationRuns(ctx context.Context) ([]Run, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id,repository,pull_id,actor_id,
  json_extract(record,'$.number'),state,COALESCE(payload_id,''),json_extract(record,'$.private'),
  json_extract(record,'$.created_at'),COALESCE(json_extract(record,'$.inbox_item_id'),''),
- (SELECT COALESCE(group_concat(id),'') FROM input_requests WHERE run_id=runs.id AND state='pending') FROM runs ORDER BY id`)
+ (SELECT COALESCE(group_concat(id),'') FROM input_requests WHERE run_id=runs.id AND state='pending'),
+ COALESCE(json_extract(record,'$.purpose'),'') FROM runs ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +42,7 @@ func (s *Store) NotificationRuns(ctx context.Context) ([]Run, error) {
 	for rows.Next() {
 		var run Run
 		var created, inputIDs string
-		if err := rows.Scan(&run.ID, &run.Repository, &run.PullID, &run.ActorID, &run.Number, &run.State, &run.PayloadID, &run.Private, &created, &run.InboxItemID, &inputIDs); err != nil {
+		if err := rows.Scan(&run.ID, &run.Repository, &run.PullID, &run.ActorID, &run.Number, &run.State, &run.PayloadID, &run.Private, &created, &run.InboxItemID, &inputIDs, &run.Purpose); err != nil {
 			return nil, err
 		}
 		run.CreatedAt, err = time.Parse(time.RFC3339Nano, created)

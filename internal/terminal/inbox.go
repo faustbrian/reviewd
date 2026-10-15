@@ -19,6 +19,7 @@ import (
 )
 
 type Entry struct {
+	Purpose, FeedbackResumeConfirmation         string
 	ExecutionKind, FeedbackConfirmation         string
 	InputID                                     string
 	Questions                                   []clarification.Question
@@ -277,7 +278,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 					m.status = "Resize to at least 24×10 to confirm, or use ordinary commands."
 					return m, nil
 				}
-				if m.pending.Kind == "feedback" && m.bodyHeight() == 0 {
+				if (m.pending.Kind == "feedback" || m.pending.Kind == "feedback-resume") && m.bodyHeight() == 0 {
 					m.status = "Resize until the captured feedback details can be inspected, or use the ordinary feedback command."
 					return m, nil
 				}
@@ -395,6 +396,14 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			case "v":
 				return m, m.execute(Action{Kind: "refresh", Entry: entry})
 			case "g":
+				if entry.Purpose == "feedback" {
+					if entry.FeedbackResumeConfirmation == "" {
+						m.status = "Select retained pending/partial feedback; active or closed work cannot be restarted."
+						return m, nil
+					}
+					action.Kind = "feedback-resume"
+					break
+				}
 				return m, m.execute(Action{Kind: "reconcile", Entry: entry})
 			default:
 				return m, nil
@@ -490,7 +499,10 @@ func (m *model) header() []string {
 		if m.pending.Kind == "feedback" {
 			lines[len(lines)-1] = line("Handle PR feedback: " + entry.Title)
 		}
-		if m.pending.Kind == "start" || m.pending.Kind == "feedback" {
+		if m.pending.Kind == "feedback-resume" {
+			lines[len(lines)-1] = line("Continue retained feedback: " + entry.Title)
+		}
+		if m.pending.Kind == "start" || m.pending.Kind == "feedback" || m.pending.Kind == "feedback-resume" {
 			model, effort := m.pending.Model, m.pending.Effort
 			if model == "" {
 				model = entry.Model
@@ -498,8 +510,11 @@ func (m *model) header() []string {
 			if effort == "" {
 				effort = entry.Effort
 			}
-			if m.pending.Kind == "feedback" {
+			if m.pending.Kind == "feedback" || m.pending.Kind == "feedback-resume" {
 				controls := "m model · e effort · y authorize feedback scope · n/esc cancel"
+				if m.pending.Kind == "feedback-resume" {
+					controls = "Same run/work · no uncertain effect replay · y continue · n/esc cancel"
+				}
 				if width < 65 {
 					controls = "y confirm · n cancel"
 				}
@@ -636,7 +651,9 @@ h handle typed feedback: separate fix/commit/push/GitHub scope confirmation;
 m/e select that run's feedback model/effort. An unavailable executor holds it.
 x skip the captured event; f follow; F stop following.
 p publish the exact captured preview; P explicitly repair one missing finding.
-v refresh checks without another model turn; g reconcile an existing submission.
+v refresh checks without another model turn; g reconcile an existing submission
+or explicitly confirm continuation of the same retained feedback run. Feedback
+continuation preserves its original model/effort and never replays unknown effects.
 c request cancellation of the exact run; this does not retract a remote review.
 a pause/resume the project; z duration snooze (d edits); Z until new commits;
 u release snooze. Holds do not cancel an already-running private review.

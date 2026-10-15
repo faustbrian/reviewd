@@ -41,6 +41,7 @@ type CommandHost interface {
 type CommandEnvironment struct {
 	Backend, OS, Architecture, Workspace string
 	Image                                string `json:",omitempty"`
+	Instructions                         string `json:",omitempty"`
 }
 
 // Container selectors come only from frozen operator global/project policy.
@@ -51,6 +52,12 @@ type WorkspaceOptions struct {
 	// Application-only acceptance seam: actual relocated package, never PATH,
 	// model input or a configurable replacement helper.
 	nativeExecutable string
+	// Exact operator hook files only; never HOME, credentials or repository-
+	// selected host paths. Containers instead need the frozen policy in-image.
+	trustedReadRoots  []string
+	instructionRoot   string
+	retainedDirectory string
+	inspectionHead    string
 }
 
 func (w *Workspace) Close() error {
@@ -116,12 +123,17 @@ func (h *ownedWorkspaceCommands) Run(ctx context.Context, command []string, time
 
 func startWorkspaceBackend(ctx context.Context, owner *store.PrivateOwner, directory string, writable bool, options WorkspaceOptions) (CommandHost, CommandEnvironment, string, error) {
 	environment := CommandEnvironment{Backend: "native", OS: runtime.GOOS, Architecture: runtime.GOARCH, Workspace: directory}
+	environment.Instructions = options.instructionRoot
 	if runtime.GOOS == "linux" {
 		git, err := workspaceGit()
 		if err != nil {
 			return nil, environment, "", err
 		}
-		host, err := codex.StartCommandRuntime(ctx, codex.CommandOptions{RuntimeOptions: options.Runtime, Workspace: directory, Writable: writable, ReadRoots: []string{git}})
+		reads := append([]string{git}, options.trustedReadRoots...)
+		if options.instructionRoot != "" {
+			reads = append(reads, options.instructionRoot)
+		}
+		host, err := codex.StartCommandRuntime(ctx, codex.CommandOptions{RuntimeOptions: options.Runtime, Workspace: directory, Writable: writable, ReadRoots: reads, InstructionsRoot: options.instructionRoot})
 		return host, environment, git, err
 	}
 	if runtime.GOOS != "darwin" {
@@ -150,12 +162,13 @@ func startWorkspaceBackend(ctx context.Context, owner *store.PrivateOwner, direc
 	if err != nil {
 		return nil, environment, "", err
 	}
-	host, err := containercmd.New(ctx, owner, containercmd.Options{Endpoint: options.ContainerEndpoint, Image: options.ContainerImage, Workspace: directory, Writable: writable, Helper: helper.Path, HelperSHA256: helper.SHA256})
+	host, err := containercmd.New(ctx, owner, containercmd.Options{Endpoint: options.ContainerEndpoint, Image: options.ContainerImage, Workspace: directory, Writable: writable, Helper: helper.Path, HelperSHA256: helper.SHA256, InstructionsRoot: options.instructionRoot})
 	if err != nil {
 		return nil, environment, "", err
 	}
 	guest := host.Environment()
 	environment = CommandEnvironment{Backend: "container", OS: guest.OS, Architecture: guest.Architecture, Workspace: guest.Workspace, Image: guest.Image}
+	environment.Instructions = guest.Instructions
 	return host, environment, "git", nil
 }
 

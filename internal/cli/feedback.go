@@ -120,7 +120,7 @@ func (e *execution) feedbackCommand() *cobra.Command {
 		if e.json {
 			return writeJSON(command.OutOrStdout(), safe)
 		}
-		fmt.Fprintf(command.OutOrStdout(), "Feedback permission preview: %s #%d\nEvent: %s\nHead: %s\nBase: %s\nHuman feedback: %s\nModel: %s / %s\n\n%s\n\nNo permission recorded. Confirmation queues work for a watcher; an unavailable executor keeps it held.\n", safe.Item.Repository, safe.Item.Number, safe.Item.EventKey, safe.Item.HeadSHA, safe.Item.TargetBaseSHA, safe.Item.ContextKey, safe.Model, safe.Effort, safe.Scope)
+		fmt.Fprintf(command.OutOrStdout(), "Feedback permission preview: %s #%d\nEvent: %s\nHead: %s\nBase: %s\nHuman feedback: %s\nModel: %s / %s\n\n%s\n\nNo permission recorded. Confirmation queues work for a watcher; missing execution prerequisites keep it held.\n", safe.Item.Repository, safe.Item.Number, safe.Item.EventKey, safe.Item.HeadSHA, safe.Item.TargetBaseSHA, safe.Item.ContextKey, safe.Model, safe.Effort, safe.Scope)
 		parts := []string{"reviewd", "--config", path, "--profile", e.profile, "feedback", selected.ID, "--confirm", expected}
 		if command.Flags().Changed("model") {
 			parts = append(parts, "--model", e.model)
