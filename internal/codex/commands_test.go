@@ -31,7 +31,11 @@ func TestCodexCapabilityBoundaryFeedbackCommands(t *testing.T) {
 	if err := os.Mkdir(workspace, 0700); err != nil {
 		t.Fatal(err)
 	}
-	init := exec.Command("git", "-c", "init.defaultBranch=feedback", "init", workspace)
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal("native Git prerequisite unavailable")
+	}
+	init := exec.Command(git, "-c", "init.defaultBranch=feedback", "init", workspace)
 	init.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
 	if output, err := init.CombinedOutput(); err != nil {
 		t.Fatalf("owned Git initialization: %v %s", err, output)
@@ -40,7 +44,7 @@ func TestCodexCapabilityBoundaryFeedbackCommands(t *testing.T) {
 	if err := os.WriteFile(original, []byte("original"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	var requests atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -61,35 +65,65 @@ func TestCodexCapabilityBoundaryFeedbackCommands(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := host.Run(ctx, []string{"/bin/sh", "-c", `if cat "$1" 2>/dev/null; then echo CREDENTIAL_LEAK; else echo READ_DENIED; fi; if printf changed > source 2>/dev/null; then echo WRITE_ALLOWED; else echo WRITE_DENIED; fi; if git add source 2>/dev/null; then echo INDEX_ALLOWED; else echo INDEX_DENIED; fi; if test -n "$OPENAI_API_KEY$GH_TOKEN$CODEX_HOME$SSH_AUTH_SOCK"; then echo ENV_LEAK; else echo ENV_CLEAN; fi`, "probe", secret}, time.Second*10)
+		type operation struct {
+			name     string
+			argv     []string
+			expected string
+		}
+		writeWant, indexWant := "WRITE_DENIED", "INDEX_DENIED"
+		if writable {
+			writeWant, indexWant = "WRITE_ALLOWED", "INDEX_ALLOWED"
+		}
+		operations := []operation{
+			{"read", []string{"/bin/sh", "-c", `if cat "$1" 2>/dev/null; then echo CREDENTIAL_LEAK; else echo READ_DENIED; fi`, "probe", secret}, "READ_DENIED"},
+			{"write", []string{"/bin/sh", "-c", `if printf changed > source 2>/dev/null; then echo WRITE_ALLOWED; else echo WRITE_DENIED; fi`}, writeWant},
+			{"git executable", []string{git, "--version"}, "git version "},
+			{"index", []string{"/bin/sh", "-c", `if "$1" add source 2>/dev/null; then echo INDEX_ALLOWED; else echo INDEX_DENIED; fi`, "probe", git}, indexWant},
+			{"environment", []string{"/bin/sh", "-c", `if test -n "$OPENAI_API_KEY$GH_TOKEN$CODEX_HOME$SSH_AUTH_SOCK"; then echo ENV_LEAK; else echo ENV_CLEAN; fi`}, "ENV_CLEAN"},
+		}
+		results := make([]CommandResult, len(operations))
+		failures := make([]error, len(operations))
+		for i, operation := range operations {
+			started := time.Now()
+			results[i], failures[i] = host.Run(ctx, operation.argv, 20*time.Second)
+			t.Logf("native operation %q writable=%t duration=%s exit=%d", operation.name, writable, time.Since(started), results[i].ExitCode)
+			if failures[i] != nil || results[i].ExitCode != 0 {
+				break
+			}
+		}
 		version, versionErr := host.Run(ctx, []string{curl, "--disable", "--version"}, 5*time.Second)
 		network, networkErr := host.Run(ctx, append([]string{curl}, arguments...), 5*time.Second)
 		if closeErr := host.Close(); closeErr != nil {
 			t.Error(closeErr)
 		}
-		if err != nil || result.ExitCode != 0 || !strings.Contains(result.Stdout, "READ_DENIED") || !strings.Contains(result.Stdout, "ENV_CLEAN") || strings.Contains(result.Stdout, "LEAK") {
-			t.Fatalf("native credential boundary failed: %+v %v", result, err)
+		for i, operation := range operations {
+			result := results[i]
+			if failures[i] != nil || result.ExitCode != 0 || !strings.Contains(result.Stdout, operation.expected) || strings.Contains(result.Stdout, "LEAK") {
+				t.Fatalf("native %s boundary failed writable=%t: %+v %v", operation.name, writable, result, failures[i])
+			}
 		}
 		if versionErr != nil || version.ExitCode != 0 || !strings.Contains(version.Stdout, "curl ") {
 			t.Fatalf("native network-probe executable unavailable: %+v %v", version, versionErr)
 		}
-		if networkErr != nil || network.ExitCode == 0 || strings.Contains(network.Stdout, "owned-network-canary") || requests.Load() != 1 {
+		if networkErr != nil || (network.ExitCode != 7 && network.ExitCode != 28) || strings.Contains(network.Stdout, "owned-network-canary") || requests.Load() != 1 {
 			t.Fatalf("native network denial failed: %+v %v requests=%d", network, networkErr, requests.Load())
 		}
-		want := "WRITE_DENIED"
+		// Inspect effects independently of shell result markers. A failed Git
+		// command for an unrelated reason cannot prove the index contract.
+		wantSource := "original"
 		if writable {
-			want = "WRITE_ALLOWED"
+			wantSource = "changed"
 		}
-		indexWant := "INDEX_DENIED"
-		if writable {
-			indexWant = "INDEX_ALLOWED"
+		if data, err := os.ReadFile(original); err != nil || string(data) != wantSource {
+			t.Fatalf("unexpected source effect writable=%t: %v", writable, err)
 		}
-		if !strings.Contains(result.Stdout, indexWant) {
-			t.Fatalf("incorrect Git metadata permission writable=%t: %+v", writable, result)
+		inspect := exec.Command(git, "-C", workspace, "ls-files", "--stage")
+		inspect.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+		index, err := inspect.Output()
+		if err != nil || strings.Contains(string(index), "\tsource\n") != writable {
+			t.Fatalf("unexpected index effect writable=%t: %v", writable, err)
 		}
-		if !strings.Contains(result.Stdout, want) {
-			t.Fatalf("incorrect command permission writable=%t: %+v", writable, result)
-		}
+
 	}
 	data, err := os.ReadFile(secret)
 	if err != nil || string(data) != "owned-credential-canary" {
