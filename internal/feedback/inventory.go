@@ -188,12 +188,14 @@ func Collect(remote github.ReviewContext, actor github.Identity) (result Invento
 	for _, item := range items {
 		// Delivery-only fields are intentionally outside the human-content
 		// revision: API URL/view differences and our own thread resolution or
-		// line movement cannot create another automatic fixing request.
+		// line movement cannot create another automatic fixing request. Approval
+		// dismissal can also be an automatic effect of a push/base change; keep
+		// its current state as evidence, not as new human-content identity.
 		item.CreatedAt, item.UpdatedAt = item.CreatedAt.UTC(), item.UpdatedAt.UTC()
 		item.Revision = fingerprint(struct {
-			Key, Body, State string
+			Key, Body        string
 			Created, Updated time.Time
-		}{item.Key, item.Body, item.ReviewState, item.CreatedAt, item.UpdatedAt})
+		}{item.Key, item.Body, item.CreatedAt, item.UpdatedAt})
 		result.Items = append(result.Items, item)
 	}
 	sort.Slice(result.Items, func(i, j int) bool { return result.Items[i].Key < result.Items[j].Key })

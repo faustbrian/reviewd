@@ -33,8 +33,10 @@ decisions or ambiguous publication. The local watcher and `cleanup` share the
 [retention policy](RETENTION.md), preserving compact run/remote identities.
 Private source/skill/runtime storage is separately scoped under the state
 directory; see [owner/resource recovery](RECOVERY.md). The local ownership
-and durable scheduler cooldown additions advance SQLite state to schema 7;
-older binaries reject it.
+and typed feedback inbox additions advance SQLite state to schema 9. Older
+binaries reject it rather than reinterpret fixing consent as private-review
+consent. Existing records and decisions are preserved; do not delete the database
+to downgrade. This is separate from configuration `schema_version = 1`.
 
 ## Initialize and diagnose
 
@@ -190,6 +192,54 @@ exclude_authors = ["@me", "dependabot[bot]"]
 [projects."shipitfi/api".reviewer]
 exclude_authors = ["@me", "dependabot[bot]", "another-author"]
 ```
+
+## Separate feedback monitoring
+
+Setting `feedback.authors` or `feedback.action` explicitly in operator global or
+exact-project configuration selects the separate feedback-handling inbox lane.
+Its author filter selects PR authors, not reviewers. The default is `['@me']`,
+matched by authenticated account ID; exact named logins are case-insensitive.
+An empty replacement list disables the lane. Review exclusions and
+`github.watch_own_prs` do not control this selection. Model-only changes do not
+enable monitoring.
+
+```toml
+[feedback]
+authors = ["@me"]
+action = "ask"
+model = "gpt-6.1-sol"
+reasoning_effort = "high"
+
+[projects."shipitfi/api".feedback]
+action = "notify"
+
+[projects."shipitfi/bill".feedback]
+action = "auto"
+```
+
+Actions are `ignore`, `notify`, `ask`, or explicitly opted-in `auto`. If only
+authors are specified, legacy review-trigger actions remain applicable, but
+legacy `auto` becomes `ask`: existing private-review policy cannot grant fixing
+authority. Neither author selection nor automatic fixing can come from a
+repository `.reviewd` or command-line override. Agent model/effort, installed
+`feedback.skill` (default `handle-pr-feedback`), `feedback.skill_path`, and
+`limits.feedback_timeout` (default `60m`) are independent of the private reviewer.
+
+**Current execution boundary:** discovery and typed admission are available;
+the modifying executor and its full-scope confirmation are not connected.
+Automatic feedback items are held with a durable availability diagnostic in
+JSON/plain/terminal inboxes and notifications, never sent to the private
+reviewer. This hold does not count as synchronization failure or stop unrelated
+watching; genuine acquisition/storage failures retain their normal behavior.
+`reviewd start` continues to
+authorize private reviewing only and rejects this category. Configuring `auto`
+does not currently perform fixes, commits, pushes, metadata changes, replies,
+thread resolution, or renewed reviewer requests.
+
+Without explicit author/action settings, existing own-PR feedback monitoring
+and private-review decisions keep their legacy semantics. On opting in, any
+existing explicit legacy decision or linked run retains its original category;
+it does not acquire modifying authority.
 
 ## Output and completion
 

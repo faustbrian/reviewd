@@ -146,6 +146,18 @@ func (s Snapshot) FeedbackAuthorAllowed(authorID int64, login string, actorID in
 	return false
 }
 
+// FeedbackMonitoringConfigured distinguishes the separately opted-in lane from
+// historical incoming-feedback/private-review monitoring. Selecting an agent
+// alone does not subscribe the operator to a new category of work.
+func (s Snapshot) FeedbackMonitoringConfigured() bool {
+	for _, name := range []string{"feedback.authors", "feedback.action"} {
+		if origin, ok := s.origins[name]; ok && origin.Layer != "built-in" {
+			return true
+		}
+	}
+	return false
+}
+
 // FeedbackAction requires new explicit operator consent for automatic fixes.
 // Historical action=auto requested only private reviewing and cannot acquire
 // the distinct modifying capability after an upgrade.

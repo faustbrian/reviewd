@@ -33,13 +33,16 @@ type Engine struct {
 	Configuration *config.Manager
 	Connect       func(context.Context, string) (*github.Client, error)
 	Reviewer      func(*github.Client) review.Service
-	Announce      func(context.Context, *github.Client, *config.Document) error
-	Now           func() time.Time
-	active        map[string]activeWork
-	done          chan completion
-	closing       bool
-	client        *github.Client
-	admitted      map[string]bool
+	// Feedback is deliberately separate from the read-only reviewer factory.
+	// A missing executor holds typed work; it never falls back to reviewing.
+	Feedback func(context.Context, *config.Document, *github.Client, store.InboxItem) (store.Run, error)
+	Announce func(context.Context, *github.Client, *config.Document) error
+	Now      func() time.Time
+	active   map[string]activeWork
+	done     chan completion
+	closing  bool
+	client   *github.Client
+	admitted map[string]bool
 }
 
 func (e *Engine) initialize() {
@@ -101,7 +104,8 @@ func (e *Engine) Tick(ctx context.Context) (resultErr error) {
 	for id, work := range e.active {
 		item, exists := current[id]
 		scope, allowed := eligible[work.item.Repository]
-		if !exists || !allowed || scope.ActorID != work.item.ActorID || item.EventKey != work.item.EventKey || item.State == "ineligible" || item.State == "closed" {
+		changedFeedbackTarget := work.item.ExecutionKind == "feedback_v1" && (item.HeadSHA != work.item.HeadSHA || item.TargetBaseSHA != work.item.TargetBaseSHA || item.ContextKey != work.item.ContextKey)
+		if !exists || !allowed || scope.ActorID != work.item.ActorID || item.EventKey != work.item.EventKey || changedFeedbackTarget || item.State == "ineligible" || item.State == "closed" {
 			work.cancel()
 		}
 	}
@@ -126,14 +130,15 @@ func (e *Engine) Tick(ctx context.Context) (resultErr error) {
 // even for jobs started before the latest configuration was loaded.
 func (e *Engine) revokeExcludedReviews(ctx context.Context, document *config.Document) error {
 	for _, work := range e.active {
-		// Every current executor is a read-only reviewer, including legacy
-		// feedback-triggered review jobs. Inbox category is not capability.
+		// Legacy feedback-triggered jobs are private reviewers. Versioned
+		// modifying work instead follows its independent author/action policy.
 		policy, err := config.Resolve(document, work.item.Repository, nil, nil)
 		if err != nil {
 			work.cancel()
 			return err
 		}
-		if len(policy.Strings("reviewer.exclude_authors")) == 0 {
+		feedback := work.item.Category == "feedback_handling" && work.item.ExecutionKind == "feedback_v1"
+		if !feedback && len(policy.Strings("reviewer.exclude_authors")) == 0 {
 			continue
 		}
 		observations, err := e.Store.Observations(ctx, work.item.Repository, work.item.ActorID)
@@ -150,7 +155,11 @@ func (e *Engine) revokeExcludedReviews(ctx context.Context, document *config.Doc
 			work.cancel()
 			continue
 		}
-		if policy.ReviewAuthorExcluded(record.Pull.Author.ID, record.Pull.Author.Login, work.item.ActorID) {
+		if feedback {
+			if !policy.FeedbackAuthorAllowed(record.Pull.Author.ID, record.Pull.Author.Login, work.item.ActorID) || (!work.item.Manual && policy.FeedbackAction(work.item.Trigger) != "auto") {
+				work.cancel()
+			}
+		} else if policy.ReviewAuthorExcluded(record.Pull.Author.ID, record.Pull.Author.Login, work.item.ActorID) {
 			work.cancel()
 		}
 	}
@@ -209,6 +218,7 @@ func (e *Engine) Admit(ctx context.Context) error {
 		return items[i].UpdatedAt.Before(items[j].UpdatedAt)
 	})
 	limit := int(defaults.Values()["limits.max_concurrent_reviews"].(int64))
+	var heldExecution error
 	for _, item := range items {
 		if len(e.active) >= limit {
 			break
@@ -241,6 +251,35 @@ func (e *Engine) Admit(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		feedback := item.Category == "feedback_handling" && item.ExecutionKind == "feedback_v1"
+		if item.ExecutionKind != "" || item.Category == "feedback_handling" {
+			if !feedback {
+				heldExecution = errors.Join(heldExecution, errors.New("unknown inbox execution kind; work is held without reviewer fallback"))
+				continue
+			}
+			if e.Feedback == nil {
+				if err := e.Store.SetFeedbackExecutionHold(ctx, item, "Feedback automation is unavailable; this item is held without starting a private review. Other review monitoring continues."); err != nil {
+					return err
+				}
+				continue
+			}
+			if !item.Manual && policy.FeedbackAction(item.Trigger) != "auto" {
+				continue
+			}
+			observations, err := e.Store.Observations(ctx, item.Repository, item.ActorID)
+			if err != nil {
+				return err
+			}
+			var captured struct {
+				Pull github.Pull `json:"pull"`
+			}
+			if json.Unmarshal(observations[item.PullID].Record, &captured) != nil || captured.Pull.Author.ID <= 0 || captured.Pull.Author.Login == "" || !policy.FeedbackAuthorAllowed(captured.Pull.Author.ID, captured.Pull.Author.Login, item.ActorID) {
+				continue
+			}
+			if err := e.Store.SetFeedbackExecutionHold(ctx, item, ""); err != nil {
+				return err
+			}
+		}
 		if (item.Trigger == "head_updated" || item.Trigger == "context_changed") && e.Now().Before(item.UpdatedAt.Add(policy.Duration("watch.debounce"))) {
 			continue
 		}
@@ -251,13 +290,17 @@ func (e *Engine) Admit(ctx context.Context) error {
 		e.admitted[workKey] = true
 		e.active[item.ID] = activeWork{item: item, cancel: cancel}
 		go func(item store.InboxItem, document *config.Document, client *github.Client) {
-			service := e.Reviewer(client)
 			var run store.Run
 			var err error
-			if item.State == "prepared" {
-				run, err = service.RefreshChecks(workerCtx, item.RunID)
+			if feedback {
+				run, err = e.Feedback(workerCtx, document, client, item)
 			} else {
-				run, err = service.StartItem(workerCtx, document, item, item.Overrides, item.Manual, item.ReviewNow)
+				service := e.Reviewer(client)
+				if item.State == "prepared" {
+					run, err = service.RefreshChecks(workerCtx, item.RunID)
+				} else {
+					run, err = service.StartItem(workerCtx, document, item, item.Overrides, item.Manual, item.ReviewNow)
+				}
 			}
 			if run.ID != "" {
 				if current, readErr := e.Store.Get(context.Background(), run.ID); readErr == nil {
@@ -272,7 +315,7 @@ func (e *Engine) Admit(ctx context.Context) error {
 			e.done <- completion{item: item, run: run, err: err, observedAt: observed}
 		}(item, document, e.client)
 	}
-	return nil
+	return heldExecution
 }
 
 // Complete projects factual run state and uses the existing publication owner

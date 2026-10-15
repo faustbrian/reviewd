@@ -108,6 +108,7 @@ func (s *Service) Pump(ctx context.Context, document *config.Document, force boo
 	}
 	for _, item := range items {
 		actionable := item.State == "pending_decision" || item.State == "attention" || item.State == "failed"
+		identity := fingerprint(item.EventKey, item.State)
 		body := "Review requested; use reviewd start " + item.ID + " or reviewd skip " + item.ID + "."
 		if item.State == "attention" {
 			body = "Review attention; inspect reviewd inbox."
@@ -118,8 +119,19 @@ func (s *Service) Pump(ctx context.Context, document *config.Document, force boo
 		if item.State == "failed" {
 			body = "Review work needs attention; inspect reviewd inbox."
 		}
+		if item.Category == "feedback_handling" || item.ExecutionKind == "feedback_v1" {
+			body = "Incoming feedback for the separate feedback-handling workflow; inspect reviewd inbox. Private-review start does not authorize fixes."
+			if item.State == "failed" {
+				body = "Feedback handling needs attention; inspect reviewd inbox and its linked run before deciding again."
+			}
+			if item.ExecutionHold != "" {
+				actionable = true
+				identity = fingerprint(item.EventKey, item.State, item.ExecutionHold)
+				body = "Feedback automation is unavailable; queued feedback is held. Inspect reviewd inbox. Private-review monitoring continues."
+			}
+		}
 		add(store.Notification{Source: "item:" + item.ID, Repository: item.Repository, ActorID: item.ActorID,
-			PullID: item.PullID, Number: item.Number, Fingerprint: fingerprint(item.EventKey, item.State),
+			PullID: item.PullID, Number: item.Number, Fingerprint: identity,
 			Body: body, Initial: item.Baseline}, actionable, item.UpdatedAt)
 	}
 	for _, run := range runs {

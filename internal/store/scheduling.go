@@ -8,6 +8,23 @@ import (
 	"time"
 )
 
+// SetFeedbackExecutionHold is presentation metadata, not failure/retry or
+// execution authority. A stale observation cannot change another event/target.
+func (s *Store) SetFeedbackExecutionHold(ctx context.Context, item InboxItem, reason string) error {
+	if len(reason) > 4096 {
+		return errors.New("feedback execution hold is too long")
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE inbox_items SET record=json_set(record,'$.execution_hold',?)
+ WHERE id=? AND repository=? AND actor_id=? AND pull_id=?
+ AND json_extract(record,'$.category')='feedback_handling' AND json_extract(record,'$.execution_kind')='feedback_v1'
+ AND json_extract(record,'$.event_key')=? AND COALESCE(json_extract(record,'$.decision_id'),'')=?
+ AND json_extract(record,'$.head_sha')=? AND json_extract(record,'$.target_base_sha')=? AND json_extract(record,'$.context_key')=?
+ AND json_extract(record,'$.state') IN ('queued','retry_wait') AND COALESCE(json_extract(record,'$.run_id'),'')=''
+ AND COALESCE(json_extract(record,'$.execution_hold'),'')!=?
+ AND EXISTS(SELECT 1 FROM discovery_scopes d WHERE d.repository=inbox_items.repository AND d.actor_id=inbox_items.actor_id AND json_extract(d.record,'$.state')='ok')`, reason, item.ID, item.Repository, item.ActorID, item.PullID, item.EventKey, item.DecisionID, item.HeadSHA, item.TargetBaseSHA, item.ContextKey, reason)
+	return err
+}
+
 func (s *Store) ItemFailure(ctx context.Context, item InboxItem, message string, now time.Time, retryAfter ...time.Duration) error {
 	if message == "" {
 		return errors.New("failure requires a diagnostic")

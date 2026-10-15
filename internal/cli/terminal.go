@@ -98,7 +98,8 @@ func (e *execution) terminalSnapshot(ctx context.Context, durable *store.Store, 
 			entry.Key, entry.ItemID, entry.EventKey = "item:"+item.ID, item.ID, item.EventKey
 			entry.Project, entry.State, entry.RunID = item.Repository, item.State, item.RunID
 			entry.Title = fmt.Sprintf("%s #%d %s", strings.TrimPrefix(item.Repository, "github.com/"), item.Number, item.Title)
-			if item.Category == "own_pr_feedback" {
+			feedback := item.Category == "feedback_handling" && item.ExecutionKind == "feedback_v1"
+			if item.Category == "own_pr_feedback" || feedback {
 				entry.Section = "feedback"
 			}
 			fmt.Fprintf(&text, "PR: %s #%d\nTitle: %q\nWhy: %s\nTrigger: %s\nAction policy: %s\nInbox state: %s\nHead: %s\nControlling base: %s\n", item.Repository, item.Number, item.Title, item.Explanation, item.Trigger, item.Action, item.State, item.HeadSHA, item.TargetBaseSHA)
@@ -106,14 +107,22 @@ func (e *execution) terminalSnapshot(ctx context.Context, durable *store.Store, 
 			if err != nil {
 				return err
 			}
-			entry.Model, entry.Effort = policy.String("reviewer.model"), policy.String("reviewer.reasoning_effort")
-			fmt.Fprintf(&text, "Operator/project defaults: %s / %s\nPublication policy: %s\nTrusted repository preferences are resolved at review start.\n", entry.Model, entry.Effort, policy.String("actions.publish_review"))
+			prefix := "reviewer."
+			if feedback {
+				prefix = "feedback."
+			}
+			entry.Model, entry.Effort = policy.String(prefix+"model"), policy.String(prefix+"reasoning_effort")
+			if feedback {
+				fmt.Fprintf(&text, "Operator/project defaults: %s / %s\nThis is the separate feedback-handling workflow. It needs its own executor and fixing/commit/push/GitHub confirmation; private-review start does not grant those permissions.\n", entry.Model, entry.Effort)
+			} else {
+				fmt.Fprintf(&text, "Operator/project defaults: %s / %s\nPublication policy: %s\nTrusted repository preferences are resolved at review start.\n", entry.Model, entry.Effort, policy.String("actions.publish_review"))
+			}
 			if len(item.Overrides) > 0 {
 				chosen, err := config.Resolve(document, item.Repository, nil, item.Overrides)
 				if err != nil {
 					return err
 				}
-				fmt.Fprintf(&text, "Existing queued decision model/effort: %s / %s\n", chosen.String("reviewer.model"), chosen.String("reviewer.reasoning_effort"))
+				fmt.Fprintf(&text, "Existing queued decision model/effort: %s / %s\n", chosen.String(prefix+"model"), chosen.String(prefix+"reasoning_effort"))
 			}
 			for _, hold := range controls.Snoozes {
 				if hold.ItemID == item.ID {
@@ -126,6 +135,9 @@ func (e *execution) terminalSnapshot(ctx context.Context, durable *store.Store, 
 			}
 			if item.Failure != "" {
 				fmt.Fprintln(&text, "Attention:", item.Failure)
+			}
+			if item.ExecutionHold != "" {
+				fmt.Fprintln(&text, "Execution held:", item.ExecutionHold)
 			}
 		}
 		if run != nil {
@@ -140,7 +152,11 @@ func (e *execution) terminalSnapshot(ctx context.Context, durable *store.Store, 
 			}
 			var policy config.Snapshot
 			if jsonErr := policy.UnmarshalJSON(run.Configuration); jsonErr == nil {
-				fmt.Fprintf(&text, "Frozen run model/effort: %s / %s\n", policy.String("reviewer.model"), policy.String("reviewer.reasoning_effort"))
+				prefix := "reviewer."
+				if run.Purpose == "feedback" {
+					prefix = "feedback."
+				}
+				fmt.Fprintf(&text, "Frozen run model/effort: %s / %s\n", policy.String(prefix+"model"), policy.String(prefix+"reasoning_effort"))
 			}
 			fmt.Fprintln(&text)
 			if err := e.presentRun(&text, *run); err != nil {

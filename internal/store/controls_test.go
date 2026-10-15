@@ -205,7 +205,7 @@ func TestConcurrentSchemaUpgradeRetainsExistingWork(t *testing.T) {
 	}
 	defer s.Close()
 	var version int
-	if err = s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version != 8 {
+	if err = s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version != 9 {
 		t.Fatalf("schema upgrade regressed: %d %v", version, err)
 	}
 }

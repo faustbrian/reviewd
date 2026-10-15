@@ -38,13 +38,16 @@ func migrate(ctx context.Context, db *sql.DB) (err error) {
 	if err := conn.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return errors.New("cannot read state database schema")
 	}
-	if version == 8 {
+	if version == 9 {
 		return nil
 	}
-	if version > 8 {
+	if version > 9 {
 		return errors.New("state database uses a newer schema; upgrade reviewd without replacing the database")
 	}
-	schemas := []string{runSchema, discoverySchema, notificationSchema, controlsSchema, inputSchema, ownerSchema, cooldownSchema, feedbackSchema}
+	// The ninth migration is a semantic compatibility fence: older readers do
+	// not recognize typed modifying inbox work and must refuse this database.
+	// Existing records and decisions are deliberately left byte-for-byte intact.
+	schemas := []string{runSchema, discoverySchema, notificationSchema, controlsSchema, inputSchema, ownerSchema, cooldownSchema, feedbackSchema, "SELECT 1"}
 	for index := version; index < len(schemas); index++ {
 		if _, err := conn.ExecContext(ctx, schemas[index]); err != nil {
 			return errors.New("cannot migrate durable state schema")
@@ -60,7 +63,7 @@ func migrate(ctx context.Context, db *sql.DB) (err error) {
 	if invalid || checkErr != nil {
 		return errors.New("state migration would leave an invalid referenced run")
 	}
-	if _, err := conn.ExecContext(ctx, "PRAGMA user_version=8"); err != nil {
+	if _, err := conn.ExecContext(ctx, "PRAGMA user_version=9"); err != nil {
 		return errors.New("cannot record state schema version")
 	}
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {

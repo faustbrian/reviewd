@@ -12,6 +12,7 @@ import (
 	"sort"
 
 	"github.com/faustbrian/reviewd/internal/config"
+	feedbacklane "github.com/faustbrian/reviewd/internal/feedback"
 	"github.com/faustbrian/reviewd/internal/github"
 	"github.com/faustbrian/reviewd/internal/review"
 	"github.com/faustbrian/reviewd/internal/store"
@@ -23,6 +24,10 @@ type Service struct {
 	Store   *store.Store
 }
 type captured struct {
+	FeedbackSchema   int                   `json:"feedback_schema,omitempty"`
+	FeedbackEligible bool                  `json:"feedback_eligible,omitempty"`
+	FeedbackDigest   string                `json:"feedback_digest,omitempty"`
+	FeedbackReviews  string                `json:"feedback_reviews,omitempty"`
 	Following        bool                  `json:"following"`
 	Requested        bool                  `json:"requested"`
 	Pull             github.DiscoveredPull `json:"pull"`
@@ -169,7 +174,7 @@ func (s Service) syncRepository(ctx context.Context, document *config.Document, 
 		if json.Unmarshal(row.Record, &old) != nil {
 			return errors.New("stored observation is invalid")
 		}
-		if old.Pull.State == "open" && (old.Owed || old.Own || old.Following) && !listed[id] {
+		if old.Pull.State == "open" && (old.Owed || old.Own || old.Following || old.FeedbackEligible) && !listed[id] {
 			missing[id] = row.Number
 		}
 		if old.Pull.State == "closed" {
@@ -230,12 +235,17 @@ func (s Service) syncRepository(ctx context.Context, document *config.Document, 
 		followState, tracked := tracking[pull.ID]
 		current.Following = followState.Following
 		current.Owed = current.Owed || current.Following
-		current.Own = policy.Bool("github.watch_own_prs") && pull.Author.ID == actor.ID
+		separateFeedback := policy.FeedbackMonitoringConfigured()
+		current.Own = !separateFeedback && policy.Bool("github.watch_own_prs") && pull.Author.ID == actor.ID
+		if separateFeedback {
+			current.FeedbackSchema = 1
+			current.FeedbackEligible = current.Eligible && policy.FeedbackAuthorAllowed(pull.Author.ID, pull.Author.Login, actor.ID)
+		}
 		excludedReview := policy.ReviewAuthorExcluded(pull.Author.ID, pull.Author.Login, actor.ID)
 		if excludedReview {
 			current.Owed = false
 		}
-		relevant := current.Eligible && (current.Owed || current.Own || policy.String("actions.new_pull_request") != "ignore")
+		relevant := current.Eligible && (current.Owed || current.Own || current.FeedbackEligible || policy.String("actions.new_pull_request") != "ignore")
 		var old captured
 		if previous[pull.ID].Record != nil && json.Unmarshal(previous[pull.ID].Record, &old) != nil {
 			return errors.New("stored discovery observation is invalid")
@@ -272,6 +282,7 @@ func (s Service) syncRepository(ctx context.Context, document *config.Document, 
 			sort.Strings(current.RelevantRequests)
 
 		}
+		var inventory feedbacklane.Inventory
 		if relevant {
 			current.Context, err = s.GitHub.Context(ctx, pull.Pull)
 			if err != nil {
@@ -279,6 +290,20 @@ func (s Service) syncRepository(ctx context.Context, document *config.Document, 
 			}
 			if len(current.Context.Gaps) > 0 {
 				return errors.New("discovery context is incomplete: " + current.Context.Gaps[0])
+			}
+			if current.FeedbackEligible {
+				inventory, err = feedbacklane.Collect(current.Context, actor)
+				if err != nil {
+					return err
+				}
+				current.FeedbackDigest = inventory.Digest
+				revisions := []string{}
+				for _, item := range inventory.Items {
+					if item.Kind == "review" {
+						revisions = append(revisions, item.Revision)
+					}
+				}
+				current.FeedbackReviews = key(revisions)
 			}
 
 			// Exclude only application-recorded writes, not all activity by this user.
@@ -298,6 +323,13 @@ func (s Service) syncRepository(ctx context.Context, document *config.Document, 
 		contextChanged := old.Pull.ID != 0 && (old.Pull.TargetBaseSHA != pull.TargetBaseSHA || old.Pull.Title != pull.Title || old.Pull.Body != pull.Body || (old.Context.Digest != "" && current.Context.Digest != "" && old.Context.DiscoveryDigest() != current.Context.DiscoveryDigest()))
 		raw, _ := json.Marshal(current)
 		rows = append(rows, store.Observation{PullID: pull.ID, Number: pull.Number, HeadSHA: pull.HeadSHA, Record: raw, MaterialChange: headChanged || contextChanged})
+		// Existing private-review consent keeps its original category and scope;
+		// it can never be transferred into the new modifying lane on upgrade.
+		retainedLegacy := false
+		if legacy, exists := previousItems[itemIdentity{pull.ID, "own_pr_feedback"}]; separateFeedback && exists && current.Eligible && (legacy.Manual || legacy.RunID != "" || legacy.State == "skipped") {
+			items = append(items, legacy)
+			retainedLegacy = true
+		}
 
 		if !relevant {
 			if old.Owed || old.Following || old.Own {
@@ -306,6 +338,9 @@ func (s Service) syncRepository(ctx context.Context, document *config.Document, 
 					state = "closed"
 				}
 				for _, category := range []string{"reviews_owed", "own_pr_feedback"} {
+					if category == "own_pr_feedback" && retainedLegacy {
+						continue
+					}
 					items = append(items, store.InboxItem{Repository: scope.Repository, PullID: pull.ID, Number: pull.Number, ActorID: actor.ID, Category: category, State: state, Trigger: state, EventKey: key([]any{state, pull.HeadSHA, pull.Draft}), HeadSHA: pull.HeadSHA, TargetBaseSHA: pull.TargetBaseSHA, Title: pull.Title, URL: pull.URL})
 				}
 			}
@@ -339,12 +374,16 @@ func (s Service) syncRepository(ctx context.Context, document *config.Document, 
 					trigger, action = previous.Trigger, policy.String("actions."+policyTrigger)
 				}
 			}
+			itemBaseline := eventBaseline
+			if previous, exists := previousItems[itemIdentity{pull.ID, category}]; exists && previous.EventKey == event && (previous.RunID != "" || previous.Manual || (previous.Action == "auto" && action == "auto")) {
+				itemBaseline = previous.Baseline
+			}
 			state := "pending_decision"
 			if action == "ignore" {
 				state = "ignored"
 			} else if action == "notify" {
 				state = "attention"
-			} else if action == "auto" && !eventBaseline {
+			} else if action == "auto" && !itemBaseline {
 				state = "queued"
 			}
 			explanation := "Review requested from you or one of your teams."
@@ -362,10 +401,10 @@ func (s Service) syncRepository(ctx context.Context, document *config.Document, 
 			if current.Following && !current.Requested && trigger == "review_requested" {
 				explanation = "Following this PR for code and controlling-context changes."
 			}
-			if eventBaseline && action == "auto" {
+			if itemBaseline && action == "auto" {
 				explanation += " Existing backlog is held until an explicit start decision."
 			}
-			return store.InboxItem{Repository: scope.Repository, PullID: pull.ID, Number: pull.Number, ActorID: actor.ID, Category: category, Trigger: trigger, Action: action, State: state, Baseline: eventBaseline, EventKey: event, HeadSHA: pull.HeadSHA, TargetBaseSHA: pull.TargetBaseSHA, ContextKey: current.Context.DiscoveryDigest(), Title: pull.Title, URL: pull.URL, Explanation: explanation}
+			return store.InboxItem{Repository: scope.Repository, PullID: pull.ID, Number: pull.Number, ActorID: actor.ID, Category: category, Trigger: trigger, Action: action, State: state, Baseline: itemBaseline, EventKey: event, HeadSHA: pull.HeadSHA, TargetBaseSHA: pull.TargetBaseSHA, ContextKey: current.Context.DiscoveryDigest(), Title: pull.Title, URL: pull.URL, Explanation: explanation}
 		}
 
 		if current.Owed {
@@ -386,12 +425,50 @@ func (s Service) syncRepository(ctx context.Context, document *config.Document, 
 			}
 			items = append(items, makeItem("own_pr_feedback", trigger, action, key([]any{current.Reviews, current.Comments})))
 		}
+		if current.FeedbackEligible && len(inventory.Items) > 0 {
+			trigger := "review_submitted"
+			if old.FeedbackReviews == current.FeedbackReviews || current.FeedbackReviews == key([]string{}) {
+				trigger = "review_comment_added"
+			}
+			event := key([]string{"feedback_v1", inventory.Digest})
+			if prior, exists := previousItems[itemIdentity{pull.ID, "feedback_handling"}]; exists && prior.EventKey == event {
+				trigger = prior.Trigger
+			}
+			action := policy.FeedbackAction(trigger)
+			held := baseline || scope.FeedbackSchema != 1 || (old.Pull.ID != 0 && (old.FeedbackSchema != 1 || !old.FeedbackEligible)) || old.FeedbackDigest == current.FeedbackDigest
+			if prior, exists := previousItems[itemIdentity{pull.ID, "feedback_handling"}]; exists && prior.EventKey == event {
+				changedTarget := prior.HeadSHA != pull.HeadSHA || prior.TargetBaseSHA != pull.TargetBaseSHA || prior.ContextKey != inventory.Digest
+				if prior.RunID != "" || (prior.Manual && !changedTarget) || (!prior.Manual && prior.Action == "auto" && action == "auto") {
+					held = prior.Baseline
+				}
+			}
+			state := "pending_decision"
+			switch action {
+			case "ignore":
+				state = "ignored"
+			case "notify":
+				state = "attention"
+			case "auto":
+				if !held {
+					state = "queued"
+				}
+			}
+			explanation := "Human feedback selected for the separate feedback-handling workflow; private-review start is not fixing consent."
+			if held && action == "auto" {
+				explanation += " Existing backlog is held until an explicit feedback-handling decision."
+			}
+			items = append(items, store.InboxItem{Repository: scope.Repository, PullID: pull.ID, Number: pull.Number, ActorID: actor.ID, Category: "feedback_handling", ExecutionKind: "feedback_v1", Trigger: trigger, Action: action, State: state, Baseline: held, EventKey: event, HeadSHA: pull.HeadSHA, TargetBaseSHA: pull.TargetBaseSHA, ContextKey: inventory.Digest, Title: pull.Title, URL: pull.URL, Explanation: explanation})
+		}
 	}
 	next := scope
 	next.ActorID = actor.ID
 	next.RepositoryID = repositoryID
 	next.State = "ok"
 	next.Failure = ""
+	next.FeedbackSchema = 0
+	if policy.FeedbackMonitoringConfigured() {
+		next.FeedbackSchema = 1
+	}
 	return s.Store.ApplyDiscovery(ctx, scope, next, rows, items)
 }
 func feedback(remote github.ReviewContext, actor github.Identity) (string, string, error) {

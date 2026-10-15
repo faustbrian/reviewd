@@ -224,6 +224,15 @@ func (s *Store) create(ctx context.Context, run Run, item *InboxItem) (Run, bool
 		if err != nil || json.Unmarshal([]byte(raw), &current) != nil {
 			return Run{}, false, errors.New("current review item is unavailable")
 		}
+		// Inspect persisted type inside the same claim transaction. Neither a
+		// caller-renamed legacy item nor its old decision can grant modification.
+		if run.Purpose == "feedback" {
+			if current.Category != "feedback_handling" || current.ExecutionKind != "feedback_v1" || item.Category != current.Category || item.ExecutionKind != current.ExecutionKind {
+				return Run{}, false, errors.New("feedback claim requires the stored versioned feedback-handling event")
+			}
+		} else if current.Category == "feedback_handling" || current.ExecutionKind != "" {
+			return Run{}, false, errors.New("private reviewer cannot claim a feedback-handling decision")
+		}
 		ready := current.State == "queued" || (current.State == "retry_wait" && current.Attempts > 0 && current.Attempts < 3 && !current.RetryAt.IsZero() && !run.CreatedAt.Before(current.RetryAt))
 		if current.Repository != run.Repository || current.ActorID != run.ActorID || current.PullID != run.PullID || current.EventKey != item.EventKey || current.DecisionID != item.DecisionID || current.HeadSHA != item.HeadSHA || current.TargetBaseSHA != item.TargetBaseSHA || current.ContextKey != item.ContextKey || !ready {
 			return Run{}, false, errors.New("review item eligibility or decision changed; synchronize and choose its current event")
@@ -240,6 +249,7 @@ func (s *Store) create(ctx context.Context, run Run, item *InboxItem) (Run, bool
 	if count == 1 {
 		if item != nil {
 			current.RunID = run.ID
+			current.ExecutionHold = ""
 			current.State = "reviewing"
 			if run.Purpose == "feedback" {
 				current.State = "handling_feedback"

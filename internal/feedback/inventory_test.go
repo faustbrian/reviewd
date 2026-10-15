@@ -109,6 +109,27 @@ func TestEditedAndReorderedFeedbackKeepsStableCoalescingIdentity(t *testing.T) {
 	}
 }
 
+func TestAutomaticApprovalDismissalRetainsHumanRevisionAndActualState(t *testing.T) {
+	remote := inventoryFixture(t)
+	remote.Reviews[0] = json.RawMessage(`{"id":1,"user":{"id":8,"login":"human"},"state":"APPROVED","body":"Keep this nonblocking suggestion.","submitted_at":"2026-10-15T02:00:00Z"}`)
+	actor := github.Identity{ID: 43, Login: "reviewer"}
+	before, err := Collect(remote, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote.Reviews[0] = json.RawMessage(`{"id":1,"user":{"id":8,"login":"human"},"state":"DISMISSED","body":"Keep this nonblocking suggestion.","submitted_at":"2026-10-15T02:00:00Z"}`)
+	after, err := Collect(remote, actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Digest != after.Digest {
+		t.Fatal("automatic approval dismissal manufactured human feedback")
+	}
+	if len(after.Items) != 3 || after.Items[2].ReviewState != "DISMISSED" {
+		t.Fatal("actual review state was lost instead of excluded from human revision")
+	}
+}
+
 func TestIncompleteOrInconsistentFeedbackCannotBecomeAnActionableInventory(t *testing.T) {
 	for _, scenario := range []string{"gap", "thread_page", "identity", "edited_during_read"} {
 		t.Run(scenario, func(t *testing.T) {

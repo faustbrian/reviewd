@@ -52,6 +52,53 @@ func seed(t *testing.T, s *store.Store, items ...store.InboxItem) {
 func work(category, event string, number int) store.InboxItem {
 	return store.InboxItem{PullID: int64(700 + number), Number: number, Category: category, Trigger: "review_requested", State: "pending_decision", Action: "ask", EventKey: event}
 }
+
+func TestFeedbackNotificationCannotProposePrivateReviewConsent(t *testing.T) {
+	ctx := context.Background()
+	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Now().UTC()
+	var messages []Message
+	service := Service{Store: s, Now: func() time.Time { return now }, Terminal: func(_ context.Context, m Message) error { messages = append(messages, m); return nil }}
+	item := work("feedback_handling", "human-feedback", 1)
+	item.ExecutionKind = "feedback_v1"
+	seed(t, s, item)
+	doc := document(t, "desktop=false\n")
+	if err := service.Pump(ctx, doc, false); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(5 * time.Second)
+	if err := service.Pump(ctx, doc, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || !strings.Contains(messages[0].Body, "feedback") || strings.Contains(messages[0].Body, "reviewd start") {
+		t.Fatalf("fixing event suggested private consent: %+v", messages)
+	}
+	item.State = "queued"
+	seed(t, s, item)
+	items, _, err := s.Inbox(ctx)
+	if err != nil || len(items) != 1 {
+		t.Fatal(err)
+	}
+	if err := s.SetFeedbackExecutionHold(ctx, items[0], "Owned unavailable backend"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Pump(ctx, doc, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || !strings.Contains(messages[1].Body, "unavailable") {
+		t.Fatalf("unavailable feedback hold was hidden: %+v", messages)
+	}
+	if err := service.Pump(ctx, doc, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 {
+		t.Fatal("unchanged unavailable hold notified again")
+	}
+}
 func TestGroupedNotificationsSurviveRestartAndDoNotChangeInboxAuthority(t *testing.T) {
 	ctx := context.Background()
 	directory := filepath.Join(t.TempDir(), "state")

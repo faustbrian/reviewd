@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -10,14 +11,15 @@ import (
 )
 
 type DiscoveryScope struct {
-	Repository   string    `json:"repository"`
-	RepositoryID int64     `json:"repository_id"`
-	ActorID      int64     `json:"actor_id"`
-	Revision     int64     `json:"revision"`
-	Initialized  bool      `json:"initialized"`
-	State        string    `json:"state"`
-	Failure      string    `json:"failure,omitempty"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	FeedbackSchema int       `json:"feedback_schema,omitempty"`
+	Repository     string    `json:"repository"`
+	RepositoryID   int64     `json:"repository_id"`
+	ActorID        int64     `json:"actor_id"`
+	Revision       int64     `json:"revision"`
+	Initialized    bool      `json:"initialized"`
+	State          string    `json:"state"`
+	Failure        string    `json:"failure,omitempty"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 type Observation struct {
 	// MaterialChange is classified from the complete old/current acquisition,
@@ -29,6 +31,8 @@ type Observation struct {
 	Record         json.RawMessage `json:"record"`
 }
 type InboxItem struct {
+	ExecutionKind string         `json:"execution_kind,omitempty"`
+	ExecutionHold string         `json:"execution_hold,omitempty"`
 	ID            string         `json:"id"`
 	RunID         string         `json:"run_id,omitempty"`
 	DecisionID    string         `json:"decision_id,omitempty"`
@@ -256,10 +260,20 @@ func (s *Store) ApplyDiscovery(ctx context.Context, observed DiscoveryScope, nex
 			}
 			item.ID = old.ID
 			if old.EventKey == item.EventKey {
+				item.ExecutionHold = old.ExecutionHold
+				changedFeedbackTarget := item.ExecutionKind == "feedback_v1" && (old.HeadSHA != item.HeadSHA || old.TargetBaseSHA != item.TargetBaseSHA || old.ContextKey != item.ContextKey || old.ExecutionKind != item.ExecutionKind)
 				item.RunID = old.RunID
 				item.DecisionID, item.Manual, item.ReviewNow = old.DecisionID, old.Manual, old.ReviewNow
 				item.Overrides = old.Overrides
-				if old.RunID != "" || old.Manual || (old.Action == "auto" && item.Action == "auto") {
+				if changedFeedbackTarget && old.Manual && old.RunID == "" {
+					// Manual modifying consent described a particular target. A
+					// stable human-feedback event does not approve another head.
+					item.DecisionID, item.Manual, item.ReviewNow, item.Overrides = "", false, false, nil
+					item.Baseline = true
+					if item.Action == "auto" {
+						item.State = "pending_decision"
+					}
+				} else if old.RunID != "" || old.Manual || (old.Action == "auto" && item.Action == "auto") {
 					item.Baseline = old.Baseline
 				}
 				item.Attempts, item.RetryAt, item.Failure = old.Attempts, old.RetryAt, old.Failure
@@ -268,12 +282,19 @@ func (s *Store) ApplyDiscovery(ctx context.Context, observed DiscoveryScope, nex
 				eligible := item.State != "ignored" && item.State != "ineligible" && item.State != "closed" && item.State != "following"
 				if eligible && old.RunID != "" {
 					var state State
-					if err := tx.QueryRowContext(ctx, "SELECT state FROM runs WHERE id=? AND repository=? AND actor_id=? AND pull_id=?", old.RunID, item.Repository, item.ActorID, item.PullID).Scan(&state); err != nil {
+					var purpose string
+					if err := tx.QueryRowContext(ctx, "SELECT state,COALESCE(json_extract(record,'$.purpose'),'') FROM runs WHERE id=? AND repository=? AND actor_id=? AND pull_id=?", old.RunID, item.Repository, item.ActorID, item.PullID).Scan(&state, &purpose); err != nil {
 						return errors.New("linked review run is unavailable; preserve its durable state")
+					}
+					if (purpose == "feedback") != (item.ExecutionKind == "feedback_v1" && item.Category == "feedback_handling") {
+						return errors.New("linked run and inbox execution kinds disagree; preserve their distinct authority")
 					}
 					item.State = string(state)
 					if state == Queued {
 						item.State = "reviewing"
+						if purpose == "feedback" {
+							item.State = "handling_feedback"
+						}
 					}
 					if state == WaitingChecks && old.Attempts > 0 {
 						item.State = "retry_wait"
@@ -284,21 +305,30 @@ func (s *Store) ApplyDiscovery(ctx context.Context, observed DiscoveryScope, nex
 					if state == Prepared && old.Attempts >= 3 {
 						item.State = "failed"
 					}
-				} else if eligible && (old.Manual || (item.Action == "auto" && !item.Baseline)) {
+				} else if eligible && (item.Manual || (item.Action == "auto" && !item.Baseline)) {
 					item.State = "queued"
 				}
-				if eligible && old.RunID == "" && (old.Manual || item.Action == "auto") && old.Attempts > 0 {
+				if eligible && old.RunID == "" && (item.Manual || (item.Action == "auto" && !item.Baseline)) && old.Attempts > 0 {
 					item.State = "retry_wait"
 					if old.Attempts >= 3 {
 						item.State = "failed"
 					}
 				}
 			}
-			if old.EventKey == item.EventKey && old.Action == item.Action && old.Trigger == item.Trigger && old.State == item.State {
-				continue
-			}
 			if old.EventKey == item.EventKey && old.State == "skipped" {
 				item.State = old.State
+			}
+			if item.RunID != "" || (item.State != "queued" && item.State != "retry_wait") {
+				item.ExecutionHold = ""
+			}
+			// Event identity intentionally excludes target-head and metadata
+			// movement for feedback. Still persist refreshed display/validation
+			// facts without resetting arrival age on a genuinely unchanged poll.
+			item.UpdatedAt = old.UpdatedAt
+			oldRecord, _ := json.Marshal(old)
+			newRecord, _ := json.Marshal(item)
+			if bytes.Equal(oldRecord, newRecord) {
+				continue
 			}
 		} else if errors.Is(err, sql.ErrNoRows) {
 			item.ID, err = newID()
@@ -459,6 +489,20 @@ func (s *Store) ClaimWaitingItem(ctx context.Context, run Run, item InboxItem) (
 // DecideItem records an explicit choice against the current immutable event.
 // A decision does not authorize a later revision or grant publication rights.
 func (s *Store) DecideItem(ctx context.Context, id string, start, now bool, overrides map[string]any, expectedEvent ...string) (InboxItem, error) {
+	return s.decideItem(ctx, id, start, now, overrides, nil, expectedEvent...)
+}
+
+type FeedbackDecision struct {
+	EventKey, HeadSHA, TargetBaseSHA, ContextKey string
+}
+
+// DecideFeedbackItem is invoked only after the distinct operator confirmation
+// for fixes, normal commit/push, metadata, original replies/settled resolutions
+// and renewed existing reviewer requests. A private-review start is not consent.
+func (s *Store) DecideFeedbackItem(ctx context.Context, id string, overrides map[string]any, expected FeedbackDecision) (InboxItem, error) {
+	return s.decideItem(ctx, id, true, false, overrides, &expected, expected.EventKey)
+}
+func (s *Store) decideItem(ctx context.Context, id string, start, now bool, overrides map[string]any, feedback *FeedbackDecision, expectedEvent ...string) (InboxItem, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return InboxItem{}, err
@@ -471,10 +515,16 @@ func (s *Store) DecideItem(ctx context.Context, id string, start, now bool, over
 	if err != nil || json.Unmarshal([]byte(raw), &item) != nil {
 		return item, errors.New("current review item is unavailable; synchronize before deciding")
 	}
+	if start && ((feedback != nil && (item.Category != "feedback_handling" || item.ExecutionKind != "feedback_v1")) || (feedback == nil && (item.Category == "feedback_handling" || item.ExecutionKind != ""))) {
+		return item, errors.New("private review and feedback handling require distinct versioned decisions")
+	}
+	if feedback != nil && (feedback.EventKey == "" || feedback.HeadSHA == "" || feedback.TargetBaseSHA == "" || feedback.ContextKey == "" || feedback.HeadSHA != item.HeadSHA || feedback.TargetBaseSHA != item.TargetBaseSHA || feedback.ContextKey != item.ContextKey) {
+		return item, errors.New("displayed feedback target changed or is incomplete; inspect its current head, base and feedback before confirming")
+	}
 	if len(expectedEvent) > 1 || (len(expectedEvent) == 1 && item.EventKey != expectedEvent[0]) {
 		return item, errors.New("displayed review event changed; inspect the current item before deciding")
 	}
-	if item.State == "closed" || item.State == "ineligible" || item.State == "reviewing" || item.State == "publishing" {
+	if item.State == "closed" || item.State == "ineligible" || item.State == "reviewing" || item.State == "publishing" || item.State == "handling_feedback" {
 		return item, errors.New("item is ineligible or already running; inspect its current run")
 	}
 	if item.RunID != "" {
@@ -482,7 +532,7 @@ func (s *Store) DecideItem(ctx context.Context, id string, start, now bool, over
 		if err := tx.QueryRowContext(ctx, "SELECT state FROM runs WHERE id=? AND repository=? AND actor_id=? AND pull_id=?", item.RunID, item.Repository, item.ActorID, item.PullID).Scan(&state); err != nil {
 			return item, errors.New("linked review run is unavailable; inspect its durable state before deciding")
 		}
-		if state == Publishing {
+		if state == Publishing || state == HandlingFeedback {
 			return item, errors.New("publication is already in flight; inspect the run instead of revoking its claimed attempt")
 		}
 	}

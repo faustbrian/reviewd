@@ -109,6 +109,9 @@ func (e *execution) presentInbox(ctx context.Context, output io.Writer, durable 
 	}
 	for _, item := range items {
 		fmt.Fprintf(output, "%s  %s  %q #%d  %s\n  %s\n", item.ID, item.Category, redact(item.Repository), item.Number, item.State, terminalText(item.Explanation))
+		if item.ExecutionHold != "" {
+			fmt.Fprintln(output, "  Held:", terminalText(redact(item.ExecutionHold)))
+		}
 	}
 	for _, run := range runs {
 		fmt.Fprintf(output, "%s  %q #%d  %s\n", run.ID, redact(run.Repository), run.Number, run.State)

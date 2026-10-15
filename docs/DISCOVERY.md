@@ -74,11 +74,38 @@ events are stored as queued and processed by `watch --headless`; see
 held event for a private review; `skip <item-id>` retains its event-scoped choice.
 Standalone private URL review and exact-payload publication remain available.
 
+## Author-filtered feedback handling
+
+Explicit operator `feedback.authors` or `feedback.action` settings select a
+distinct `feedback_handling` item with `execution_kind: feedback_v1`. See
+[configuration and the current execution boundary](CONFIGURATION.md#separate-feedback-monitoring).
+The first complete acquisition after upgrade/enablement establishes its own
+baseline, including an empty repository. Existing feedback and newly eligible
+author backlog remain held. New PR feedback after that baseline is fresh work.
+
+Complete submitted-review bodies, inline comments, mixed-thread human replies,
+and PR discussion are coalesced by human-content revision. Repeated polling,
+own replies, automatic approval dismissal, thread resolution/outdated movement,
+PR head/base/metadata changes,
+and model or policy changes alone cannot manufacture new human feedback. Edited
+human content and later human replies remain new work, including at the same
+head. The durable item still refreshes its actual head/base and display facts;
+an unstarted manual modifying decision does not survive a changed target.
+
+This category cannot reuse private-review consent, a private-review worker, or
+the old feedback-triggered review category. A missing feedback executor holds
+work visibly and does not consume retries or create a private review. Review
+author exclusions do not revoke this lane; its own author filter and automatic
+action policy do, including during GitHub cooldowns. This does not yet establish
+operational fixing or any remote delivery.
+
 SQLite schema 2 adds discovery observations, status, inbox items, and follow
 preferences without replacing existing private previews or publication facts.
 An older executable may refuse the newer schema; upgrade it rather than deleting
 the profile. Schema-1 prepared-review payloads remain supported independently of
-the database migration.
+the database migration. The typed feedback inbox advances the state database to
+schema 9 specifically so older executables cannot reinterpret its authority;
+existing records and decisions remain unchanged.
 
 JSON retains the existing `schema_version` and `runs` fields and adds `items`
 and `discovery`. Integer identities are preserved exactly. Plain and JSON output

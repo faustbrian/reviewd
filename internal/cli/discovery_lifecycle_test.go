@@ -21,9 +21,12 @@ import (
 )
 
 type lifecycleItem struct {
-	ID, Category, State, Trigger, Action string
-	Number                               int
-	Baseline                             bool
+	ID, Category, State, Trigger, Action, Explanation string
+	ExecutionKind                                     string `json:"execution_kind"`
+	HeadSHA                                           string `json:"head_sha"`
+	ContextKey                                        string `json:"context_key"`
+	Number                                            int
+	Baseline                                          bool
 }
 type lifecycleInbox struct {
 	Items     []lifecycleItem

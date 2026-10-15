@@ -11,7 +11,7 @@ import (
 )
 
 func TestFeedbackLifecycleCannotAcquirePrivateReviewOrPublicationState(t *testing.T) {
-	s, item := schedulingFixture(t)
+	s, item := feedbackSchedulingFixture(t)
 	ctx := context.Background()
 	owner, err := s.BeginPrivateOwner(ctx)
 	if err != nil {
@@ -106,7 +106,7 @@ func TestFeedbackMigrationPreservesLegacyPreparedPayloadAndDecision(t *testing.T
 }
 
 func TestFeedbackResumeWaitsForProvenOwnerClosureAndRetainsPriorExecution(t *testing.T) {
-	s, item := schedulingFixture(t)
+	s, item := feedbackSchedulingFixture(t)
 	ctx := context.Background()
 	first, err := s.BeginPrivateOwner(ctx)
 	if err != nil {
@@ -159,7 +159,7 @@ func TestFeedbackResumeWaitsForProvenOwnerClosureAndRetainsPriorExecution(t *tes
 }
 
 func TestStaleFeedbackResumeCannotEraseInterveningExecutionAfterABA(t *testing.T) {
-	s, item := schedulingFixture(t)
+	s, item := feedbackSchedulingFixture(t)
 	ctx := context.Background()
 	owners := []*PrivateOwner{}
 	for range 3 {
@@ -209,5 +209,173 @@ func TestStaleFeedbackResumeCannotEraseInterveningExecutionAfterABA(t *testing.T
 	actual, err := s.Get(ctx, run.ID)
 	if err != nil || len(actual.PriorExecutions) != 2 || !strings.Contains(string(actual.PriorExecutions[0]), "execution-A") || !strings.Contains(string(actual.PriorExecutions[1]), "execution-B") || string(actual.Outcome) != string(journal) {
 		t.Fatalf("ABA lost execution/effect facts: %+v %v", actual, err)
+	}
+}
+
+func TestFeedbackClaimCannotReinterpretLegacyReviewDecision(t *testing.T) {
+	s, item := schedulingFixture(t)
+	ctx := context.Background()
+	owner, err := s.BeginPrivateOwner(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	forged := item
+	forged.Category = "feedback_handling"
+	if _, created, err := s.CreateForItem(ctx, Run{Purpose: "feedback", OwnerID: owner.ID, Repository: item.Repository, RepositoryID: 99, PullID: item.PullID, Number: item.Number, ActorID: item.ActorID, ActorLogin: "author", WorkKey: "legacy-escalation", State: Queued, Configuration: json.RawMessage(`{}`)}, forged); err == nil || created {
+		t.Fatal("feedback claim converted a stored private-review event into modifying consent")
+	}
+}
+
+func feedbackSchedulingFixture(t *testing.T) (*Store, InboxItem) {
+	t.Helper()
+	s, item := schedulingFixture(t)
+	ctx := context.Background()
+	observed, err := s.DiscoveryScope(ctx, item.Repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item.Category = "feedback_handling"
+	item.ExecutionKind = "feedback_v1"
+	item.TargetBaseSHA, item.ContextKey = "base", "human-inventory"
+	item.ID = ""
+	item.RunID = ""
+	item.DecisionID = ""
+	if err := s.ApplyDiscovery(ctx, observed, observed, []Observation{{PullID: item.PullID, Number: item.Number, Record: json.RawMessage(`{}`)}}, []InboxItem{item}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := s.DiscoveryItems(ctx, item.Repository, item.ActorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, current := range items {
+		if current.Category == "feedback_handling" {
+			return s, current
+		}
+	}
+	t.Fatal("versioned feedback fixture missing")
+	return nil, InboxItem{}
+}
+
+func TestFeedbackDecisionIsNotPrivateReviewConsent(t *testing.T) {
+	s, item := feedbackSchedulingFixture(t)
+	ctx := context.Background()
+	if _, err := s.DecideItem(ctx, item.ID, true, false, nil, item.EventKey); err == nil {
+		t.Fatal("private review start became fixing consent")
+	}
+	selected, err := s.DecideFeedbackItem(ctx, item.ID, nil, FeedbackDecision{item.EventKey, item.HeadSHA, item.TargetBaseSHA, item.ContextKey})
+	if err != nil || !selected.Manual || selected.ExecutionKind != "feedback_v1" || selected.DecisionID == "" {
+		t.Fatal("explicit feedback confirmation was not retained", err)
+	}
+	if _, _, err := s.CreateForItem(ctx, Run{Purpose: "review", Repository: item.Repository, RepositoryID: 99, PullID: item.PullID, Number: item.Number, ActorID: item.ActorID, ActorLogin: "author", WorkKey: "wrong-worker", State: Queued, Configuration: json.RawMessage(`{}`)}, selected); err == nil {
+		t.Fatal("private reviewer acquired a modifying event")
+	}
+	legacyStore, legacy := schedulingFixture(t)
+	if _, err := legacyStore.DecideFeedbackItem(ctx, legacy.ID, nil, FeedbackDecision{legacy.EventKey, legacy.HeadSHA, legacy.TargetBaseSHA, legacy.ContextKey}); err == nil {
+		t.Fatal("feedback confirmation reinterpreted a legacy private event")
+	}
+}
+
+func TestFeedbackHeadRefreshDoesNotRetainUnstartedConsent(t *testing.T) {
+	s, item := feedbackSchedulingFixture(t)
+	ctx := context.Background()
+	selected, err := s.DecideFeedbackItem(ctx, item.ID, nil, FeedbackDecision{item.EventKey, item.HeadSHA, item.TargetBaseSHA, item.ContextKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed, err := s.DiscoveryScope(ctx, item.Repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := item
+	next.HeadSHA = strings.Repeat("c", 40)
+	next.State, next.Baseline = "pending_decision", true
+	if err := s.ApplyDiscovery(ctx, observed, observed, nil, []InboxItem{next}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := s.DiscoveryItems(ctx, item.Repository, item.ActorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, current := range items {
+		if current.ID != selected.ID {
+			continue
+		}
+		if current.HeadSHA != next.HeadSHA || current.DecisionID != "" || current.Manual || current.State != "pending_decision" || !current.Baseline {
+			t.Fatalf("unstarted feedback consent survived changed target: %+v", current)
+		}
+		return
+	}
+	t.Fatal("feedback item disappeared")
+}
+
+func TestFeedbackTypedInboxUpgradePreservesVersionEightBytes(t *testing.T) {
+	s, item := feedbackSchedulingFixture(t)
+	ctx := context.Background()
+	var before string
+	if err := s.db.QueryRowContext(ctx, "SELECT record FROM inbox_items WHERE id=?", item.ID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, "PRAGMA user_version=8"); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(ctx, s.db); err != nil {
+		t.Fatal(err)
+	}
+	var version int
+	var after string
+	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version != 9 {
+		t.Fatalf("older binaries can reinterpret typed fixing items: version=%d err=%v", version, err)
+	}
+	if err := s.db.QueryRowContext(ctx, "SELECT record FROM inbox_items WHERE id=?", item.ID).Scan(&after); err != nil || before != after {
+		t.Fatal("semantic migration changed existing decision bytes", err)
+	}
+}
+
+func TestFeedbackDecisionRejectsChangedDisplayedTarget(t *testing.T) {
+	s, item := feedbackSchedulingFixture(t)
+	ctx := context.Background()
+	before, err := s.DiscoveryScope(ctx, item.Repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := item
+	next.HeadSHA = strings.Repeat("d", 40)
+	if err := s.ApplyDiscovery(ctx, before, before, nil, []InboxItem{next}); err != nil {
+		t.Fatal(err)
+	}
+	// The human saw item, then another poll refreshed its target without a new
+	// human-feedback event. Its old displayed consent must fail transactionally.
+	if _, err := s.DecideFeedbackItem(ctx, item.ID, nil, FeedbackDecision{item.EventKey, item.HeadSHA, item.TargetBaseSHA, item.ContextKey}); err == nil {
+		t.Fatal("old displayed feedback event approved an unseen new head")
+	}
+}
+
+func TestFeedbackExecutionHoldIsNonfatalScopedMetadataClearedByClaim(t *testing.T) {
+	s, item := feedbackSchedulingFixture(t)
+	ctx := context.Background()
+	if err := s.SetFeedbackExecutionHold(ctx, item, "Owned unavailable backend"); err != nil {
+		t.Fatal(err)
+	}
+	stale := item
+	stale.HeadSHA = "changed"
+	if err := s.SetFeedbackExecutionHold(ctx, stale, "Stale diagnostic"); err != nil {
+		t.Fatal(err)
+	}
+	items, _, err := s.Inbox(ctx)
+	if err != nil || len(items) != 1 || items[0].ExecutionHold != "Owned unavailable backend" || items[0].Attempts != 0 || items[0].Failure != "" || !items[0].UpdatedAt.Equal(item.UpdatedAt) {
+		t.Fatalf("hold changed authority/retries/age or accepted stale target: %+v %v", items, err)
+	}
+	owner, err := s.BeginPrivateOwner(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	if _, created, err := s.CreateForItem(ctx, Run{Purpose: "feedback", OwnerID: owner.ID, Repository: item.Repository, RepositoryID: 99, PullID: item.PullID, Number: item.Number, ActorID: item.ActorID, ActorLogin: "reviewer", WorkKey: "available-after-hold", State: Queued, Configuration: json.RawMessage(`{}`)}, item); err != nil || !created {
+		t.Fatal("hold prevented authorized claim", err)
+	}
+	items, _, err = s.Inbox(ctx)
+	if err != nil || len(items) != 1 || items[0].ExecutionHold != "" || items[0].State != "handling_feedback" {
+		t.Fatalf("real claim retained unavailable diagnostic: %+v %v", items, err)
 	}
 }

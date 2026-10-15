@@ -65,6 +65,39 @@ func TestTerminalActionsShareDurableControlsAndPrivateStart(t *testing.T) {
 	}
 }
 
+func TestTerminalFeedbackShowsIndependentModelWithoutGrantingPrivateConsent(t *testing.T) {
+	path, durable, item := terminalFixture(t)
+	ctx := context.Background()
+	scope, err := durable.DiscoveryScope(ctx, item.Repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item.ID, item.Category, item.ExecutionKind = "", "feedback_handling", "feedback_v1"
+	if err := durable.ApplyDiscovery(ctx, scope, scope, []store.Observation{{PullID: item.PullID, Number: item.Number, Record: json.RawMessage(`{}`)}}, []store.InboxItem{item}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = append(raw, []byte("\n[feedback]\naction='ask'\nmodel='separate-fixing-model'\nreasoning_effort='low'\n")...)
+	doc, err := config.Parse(raw, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := (&execution{}).terminalSnapshot(ctx, durable, doc)
+	if err != nil || len(snapshot.Entries) != 1 {
+		t.Fatalf("feedback missing: %+v %v", snapshot, err)
+	}
+	entry := snapshot.Entries[0]
+	if entry.Section != "feedback" || entry.Model != "separate-fixing-model" || entry.Effort != "low" || !strings.Contains(entry.Details, "separate feedback-handling") {
+		t.Fatalf("private reviewer presented as fixing worker: %+v", entry)
+	}
+	if _, err := terminalAction(ctx, []string{"--config", path}, terminal.Action{Kind: "start", Entry: entry}, Dependencies{}); err == nil {
+		t.Fatal("private terminal start granted fixing authority")
+	}
+}
+
 func TestTerminalSnapshotsDoNotEchoSensitiveDefaults(t *testing.T) {
 	path, durable, _ := terminalFixture(t)
 	data, err := os.ReadFile(path)
