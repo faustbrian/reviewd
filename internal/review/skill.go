@@ -33,7 +33,31 @@ func (s *CapturedSkill) Close() error {
 // CaptureSkill freezes the selected installed package, not the operator's
 // entire skill tree. References and helper source are granted as text only;
 // capturing them is not authority to execute scripts or discover connectors.
-func CaptureSkill(name, path, parent string) (capture *CapturedSkill, err error) {
+func CaptureSkill(name, path, parent string) (*CapturedSkill, error) {
+	return captureSkill(name, path, parent, "", 16, 8<<20)
+}
+
+// CaptureFeedbackSkill separately freezes the larger complete implementation
+// workflow and the explicitly invoked QA planner. Private reviewers retain
+// their original sixteen-package/8-MiB acquisition boundary.
+func CaptureFeedbackSkill(name, path, qaPath, parent string) (*CapturedSkill, error) {
+	if qaPath == "" {
+		return nil, errors.New("feedback requires the installed qa-test-planner skill")
+	}
+	return captureSkill(name, path, parent, qaPath, 24, 32<<20)
+}
+
+func (s *CapturedSkill) InstructionPath(name string) (string, error) {
+	if name == s.Identity.Name {
+		return s.Path, nil
+	}
+	if _, present := s.Documents["skill-dependency/"+name+"/SKILL.md"]; !present {
+		return "", errors.New("required instruction package was not captured")
+	}
+	return filepath.Join(s.root, name, "SKILL.md"), nil
+}
+
+func captureSkill(name, path, parent, qaPath string, packageLimit int, byteLimit int64) (capture *CapturedSkill, err error) {
 	path, err = filepath.EvalSymlinks(path)
 	if err != nil {
 		return nil, errors.New("selected installed review skill is unavailable")
@@ -62,11 +86,19 @@ func CaptureSkill(name, path, parent string) (capture *CapturedSkill, err error)
 	type packageScope struct{ directory, label, destination string }
 	packages := []packageScope{{installed, "skill", primaryDirectory}}
 	seen := map[string]bool{filepath.Base(installed): true}
+	if qaPath != "" {
+		resolved, resolveErr := filepath.EvalSymlinks(qaPath)
+		if resolveErr != nil || filepath.Base(resolved) != "SKILL.md" || filepath.Base(filepath.Dir(resolved)) != "qa-test-planner" {
+			return nil, errors.New("the actual installed qa-test-planner instruction package is required")
+		}
+		packages = append(packages, packageScope{filepath.Dir(resolved), "skill-dependency/qa-test-planner", "qa-test-planner"})
+		seen["qa-test-planner"] = true
+	}
 	dependencyLink := regexp.MustCompile(`\]\(\.\./([A-Za-z0-9_-]+)/SKILL\.md(?:#[^)]*)?\)`)
 	for index := 0; index < len(packages); index++ {
 		current := packages[index]
-		if len(packages) > 16 {
-			return nil, errors.New("selected skill has more than sixteen linked instruction packages; configure a bounded self-contained review skill")
+		if len(packages) > packageLimit {
+			return nil, errors.New("selected skill exceeds its bounded linked instruction package limit")
 		}
 		err = filepath.WalkDir(current.directory, func(selected string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
@@ -100,8 +132,8 @@ func CaptureSkill(name, path, parent string) (capture *CapturedSkill, err error)
 				return errors.New("selected skill instructions/reference text was incomplete or unsupported")
 			}
 			total += int64(len(data))
-			if total > 8<<20 {
-				return errors.New("selected skill instruction bundle exceeds 8 MiB")
+			if total > byteLimit {
+				return errors.New("selected skill instruction bundle exceeds its bounded size limit")
 			}
 			relative, relErr := filepath.Rel(current.directory, selected)
 			if relErr != nil {

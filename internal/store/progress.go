@@ -38,7 +38,7 @@ func (s *Store) RecordProgress(ctx context.Context, id, thread, turn, requested,
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE runs SET thread_id=?,turn_id=?,
  record=json_set(record,'$.requested_model',?,'$.effective_model',?,'$.progress',?,'$.usage',json(?)),updated_at=?
- WHERE id=? AND state='reviewing'
+ WHERE id=? AND state IN ('reviewing','handling_feedback')
  AND (COALESCE(thread_id,'')='' OR thread_id=?)
  AND (COALESCE(turn_id,'')='' OR (?!='' AND turn_id=?))`, thread, turn, requested, effective, activity, string(usage), timestamp(), id, thread, turn, turn)
 	return changed(result, err, "could not persist active reviewer progress; inspect this run before starting again")

@@ -49,6 +49,13 @@ var definitions = map[string]definition{
 	"reviewer.executable":           {"codex", globalScope | cliScope},
 	"reviewer.auth_home":            {"", globalScope | cliScope},
 	"reviewer.exclude_authors":      {[]string{"@me"}, globalScope | projectScope | cliScope},
+	"feedback.authors":              {[]string{"@me"}, globalScope | projectScope},
+	"feedback.action":               {"notify", globalScope | projectScope},
+	"feedback.model":                {"gpt-6.1-sol", globalScope | projectScope | cliScope},
+	"feedback.reasoning_effort":     {"high", globalScope | projectScope | cliScope},
+	"feedback.skill":                {"handle-pr-feedback", globalScope | projectScope | cliScope},
+	"feedback.skill_path":           {"", globalScope | projectScope | cliScope},
+	"limits.feedback_timeout":       {"60m", globalScope | projectScope | cliScope},
 	"limits.max_concurrent_reviews": {int64(2), globalScope | cliScope},
 	"limits.review_timeout":         {"30m", globalScope | projectScope | cliScope},
 	"actions.new_pull_request":      {"ignore", globalScope | projectScope | cliScope},
@@ -128,6 +135,38 @@ func (s Snapshot) ReviewAuthorExcluded(authorID int64, login string, actorID int
 	return false
 }
 
+// FeedbackAuthorAllowed selects PR authors, not the people leaving feedback.
+// An empty replacement list disables discovery for this lane.
+func (s Snapshot) FeedbackAuthorAllowed(authorID int64, login string, actorID int64) bool {
+	for _, author := range s.Strings("feedback.authors") {
+		if (author == "@me" && actorID > 0 && authorID == actorID) || (author != "@me" && strings.EqualFold(author, login)) {
+			return true
+		}
+	}
+	return false
+}
+
+// FeedbackAction requires new explicit operator consent for automatic fixes.
+// Historical action=auto requested only private reviewing and cannot acquire
+// the distinct modifying capability after an upgrade.
+func (s Snapshot) FeedbackAction(trigger string) string {
+	if origin, ok := s.origins["feedback.action"]; ok && origin.Layer != "built-in" {
+		return s.String("feedback.action")
+	}
+	action := s.String("actions." + trigger)
+	if action == "auto" {
+		return "ask"
+	}
+	if oneOf(action, "ignore", "notify", "ask") {
+		return action
+	}
+	return "notify"
+}
+
+func feedbackSetting(key string) bool {
+	return strings.HasPrefix(key, "feedback.") || key == "limits.feedback_timeout"
+}
+
 type snapshotWire struct {
 	SchemaVersion int               `json:"schema_version"`
 	Repository    string            `json:"repository"`
@@ -152,14 +191,26 @@ func (s *Snapshot) UnmarshalJSON(data []byte) error {
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return errors.New("configuration snapshot contains trailing data")
 	}
-	// The sole historical schema omits author exclusions. Preserve its encoded
-	// values/fingerprint so prepared review payloads do not change on restore.
+	// Accept only complete known generations. Never backfill serialized values:
+	// old prepared payloads retain their exact fingerprint and encoded bytes.
 	_, hasAuthors := wire.Values["reviewer.exclude_authors"]
+	hasFeedback, feedbackCount := false, 0
+	for key := range definitions {
+		if feedbackSetting(key) {
+			feedbackCount++
+			if _, present := wire.Values[key]; present {
+				hasFeedback = true
+			}
+		}
+	}
 	expected := len(definitions)
 	if !hasAuthors {
 		expected--
 	}
-	if wire.SchemaVersion != 1 || len(wire.Values) != expected || len(wire.Provenance) != expected {
+	if !hasFeedback {
+		expected -= feedbackCount
+	}
+	if wire.SchemaVersion != 1 || len(wire.Values) != expected || len(wire.Provenance) != expected || (hasFeedback && !hasAuthors) {
 		return errors.New("configuration snapshot has an unsupported or incomplete schema")
 	}
 	identity, err := Repository("github.com", wire.Repository)
@@ -192,10 +243,14 @@ func (s *Snapshot) UnmarshalJSON(data []byte) error {
 			return errors.New("configuration snapshot provenance grants a disallowed setting")
 		}
 	}
-	validationValues := values
-	if !hasAuthors {
-		validationValues = cloneValues(values)
-		validationValues["reviewer.exclude_authors"] = []string{"@me"}
+	validationValues := cloneValues(values)
+	for key, definition := range definitions {
+		if _, present := validationValues[key]; !present {
+			if key != "reviewer.exclude_authors" && (!feedbackSetting(key) || hasFeedback) {
+				return errors.New("configuration snapshot is missing a required setting")
+			}
+			validationValues[key] = copyValue(definition.value)
+		}
 	}
 	if err := validate(validationValues); err != nil {
 		return err
@@ -517,18 +572,23 @@ func validate(values map[string]any) error {
 		canonical = append(canonical, identity)
 	}
 	values["github.repositories"] = canonical
-	authors := values["reviewer.exclude_authors"].([]string)
-	seenAuthors := map[string]bool{}
-	for index, author := range authors {
-		author = strings.ToLower(author)
-		if author != "@me" && !authorPattern.MatchString(author) {
-			return errors.New("reviewer.exclude_authors must contain exact GitHub logins or @me")
+	for _, key := range []string{"reviewer.exclude_authors", "feedback.authors"} {
+		authors := values[key].([]string)
+		seenAuthors := map[string]bool{}
+		for index, author := range authors {
+			author = strings.ToLower(author)
+			if author != "@me" && !authorPattern.MatchString(author) {
+				return fmt.Errorf("%s must contain exact GitHub logins or @me", key)
+			}
+			if seenAuthors[author] {
+				return fmt.Errorf("%s contains a duplicate author", key)
+			}
+			seenAuthors[author] = true
+			authors[index] = author
 		}
-		if seenAuthors[author] {
-			return errors.New("reviewer.exclude_authors contains a duplicate author")
-		}
-		seenAuthors[author] = true
-		authors[index] = author
+	}
+	if !oneOf(values["feedback.action"].(string), "ignore", "notify", "ask", "auto") {
+		return errors.New("feedback.action must be ignore, notify, ask or auto")
 	}
 	for _, key := range []string{"actions.new_pull_request", "actions.review_requested", "actions.head_updated", "actions.review_submitted", "actions.review_comment_added"} {
 		if !oneOf(values[key].(string), "ignore", "notify", "ask", "auto") {
@@ -540,7 +600,7 @@ func validate(values map[string]any) error {
 	}
 	for key, bounds := range map[string][2]time.Duration{
 		"watch.poll_interval": {time.Second, 24 * time.Hour}, "watch.debounce": {0, time.Hour},
-		"limits.review_timeout": {time.Minute, 24 * time.Hour}, "notifications.group_interval": {0, 5 * time.Minute},
+		"limits.feedback_timeout": {time.Minute, 24 * time.Hour}, "limits.review_timeout": {time.Minute, 24 * time.Hour}, "notifications.group_interval": {0, 5 * time.Minute},
 	} {
 		duration, err := time.ParseDuration(values[key].(string))
 		if err != nil || duration < bounds[0] || duration > bounds[1] {
@@ -553,21 +613,27 @@ func validate(values map[string]any) error {
 	if number := values["state.retention_days"].(int64); number < 1 || number > 3650 {
 		return errors.New("state.retention_days must be between 1 and 3650")
 	}
-	if !oneOf(values["reviewer.reasoning_effort"].(string), "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra") {
-		return errors.New("reviewer.reasoning_effort must be an advertised reasoning level")
+	for _, key := range []string{"reviewer.reasoning_effort", "feedback.reasoning_effort"} {
+		if !oneOf(values[key].(string), "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra") {
+			return fmt.Errorf("%s must be an advertised reasoning level", key)
+		}
 	}
-	for _, key := range []string{"reviewer.model", "reviewer.skill", "reviewer.executable"} {
+	for _, key := range []string{"reviewer.model", "reviewer.skill", "reviewer.executable", "feedback.model", "feedback.skill"} {
 		if strings.TrimSpace(values[key].(string)) == "" || strings.ContainsRune(values[key].(string), 0) {
 			return fmt.Errorf("%s must be a nonempty identifier or path", key)
 		}
 	}
-	if value := values["reviewer.skill"].(string); !segmentPattern.MatchString(value) || credentialPattern.MatchString(value) {
-		return errors.New("reviewer.skill must be an installed skill name, not a path or credential")
+	for _, key := range []string{"reviewer.skill", "feedback.skill"} {
+		if value := values[key].(string); !segmentPattern.MatchString(value) || credentialPattern.MatchString(value) {
+			return fmt.Errorf("%s must be an installed skill name, not a path or credential", key)
+		}
 	}
-	if value := values["reviewer.model"].(string); !modelPattern.MatchString(value) || credentialPattern.MatchString(value) {
-		return errors.New("reviewer.model must be a model identifier, not a credential")
+	for _, key := range []string{"reviewer.model", "feedback.model"} {
+		if value := values[key].(string); !modelPattern.MatchString(value) || credentialPattern.MatchString(value) {
+			return fmt.Errorf("%s must be a model identifier, not a credential", key)
+		}
 	}
-	for _, key := range []string{"reviewer.skill_path", "reviewer.auth_home", "state.directory", "review.instructions"} {
+	for _, key := range []string{"reviewer.skill_path", "feedback.skill_path", "reviewer.auth_home", "state.directory", "review.instructions"} {
 		if strings.ContainsRune(values[key].(string), 0) {
 			return fmt.Errorf("%s must not contain NUL", key)
 		}

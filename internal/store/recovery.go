@@ -87,7 +87,7 @@ func (s *Store) RecoverPrivate(ctx context.Context, dry bool) (report RecoveryRe
 	}
 	// Old records have no kernel lease to test. The existence of an inbox link,
 	// old timestamp or a PID alone must not turn an unknown owner into dead work.
-	rows, err = s.db.QueryContext(ctx, `SELECT id,COALESCE(json_extract(record,'$.owner_id'),''),COALESCE(json_extract(record,'$.owner_closed'),0) FROM runs WHERE state IN ('queued','reviewing')
+	rows, err = s.db.QueryContext(ctx, `SELECT id,COALESCE(json_extract(record,'$.owner_id'),''),COALESCE(json_extract(record,'$.owner_closed'),0) FROM runs WHERE state IN ('queued','reviewing','handling_feedback')
  AND (COALESCE(json_extract(record,'$.owner_id'),'')='' OR NOT EXISTS(SELECT 1 FROM private_owners p WHERE p.id=json_extract(runs.record,'$.owner_id')))
  ORDER BY CASE WHEN COALESCE(json_extract(record,'$.owner_closed'),0)=1
  AND length(COALESCE(json_extract(record,'$.owner_id'),''))=32
@@ -135,7 +135,7 @@ func (s *Store) RecoverPrivate(ctx context.Context, dry bool) (report RecoveryRe
 			// Maintenance order is independent of user-visible run history.
 			// Persist it outside the terminal-transition transaction: rollback
 			// of one broken run must not strand every later bounded batch.
-			if _, err := s.db.ExecContext(ctx, `UPDATE runs SET record=json_set(record,'$.recovery_checked_at',?) WHERE id=? AND state IN ('queued','reviewing')`, timestamp(), item.id); err != nil {
+			if _, err := s.db.ExecContext(ctx, `UPDATE runs SET record=json_set(record,'$.recovery_checked_at',?) WHERE id=? AND state IN ('queued','reviewing','handling_feedback')`, timestamp(), item.id); err != nil {
 				individualErrors = errors.Join(individualErrors, err)
 			}
 		}
@@ -325,19 +325,19 @@ func (s *Store) failLostOwner(ctx context.Context, id string) error {
 		return err
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `UPDATE runs SET state=CASE WHEN COALESCE(json_extract(record,'$.cancellation_requested'),0)=1 THEN 'cancelled' WHEN COALESCE(json_extract(record,'$.superseded'),0)=1 THEN 'stale' ELSE 'failed' END,
- failure='Private review owner stopped; no session or answer was resumed. Inspect this run and explicitly start a fresh review.',updated_at=?
- WHERE json_extract(record,'$.owner_id')=? AND state IN ('queued','reviewing')`, timestamp(), id)
+	_, err = tx.ExecContext(ctx, `UPDATE runs SET state=CASE WHEN json_extract(record,'$.purpose')='feedback' THEN 'feedback_pending' WHEN COALESCE(json_extract(record,'$.cancellation_requested'),0)=1 THEN 'cancelled' WHEN COALESCE(json_extract(record,'$.superseded'),0)=1 THEN 'stale' ELSE 'failed' END,
+ failure=CASE WHEN json_extract(record,'$.purpose')='feedback' THEN 'Feedback owner stopped; inspect delivered effects and explicitly resume for canonical reconciliation. No operation was blindly replayed.' ELSE 'Private review owner stopped; no session or answer was resumed. Inspect this run and explicitly start a fresh review.' END,updated_at=?
+ WHERE json_extract(record,'$.owner_id')=? AND state IN ('queued','reviewing','handling_feedback')`, timestamp(), id)
 	if err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE input_requests SET state=CASE WHEN state IN ('sending','sent') THEN 'delivery_unknown' ELSE 'closed' END,
- closed_at=?,reason='owner_lost' WHERE closed_at='' AND EXISTS(SELECT 1 FROM runs r WHERE r.id=input_requests.run_id AND json_extract(r.record,'$.owner_id')=? AND r.state!='reviewing')`, timestamp(), id)
+ closed_at=?,reason='owner_lost' WHERE closed_at='' AND EXISTS(SELECT 1 FROM runs r WHERE r.id=input_requests.run_id AND json_extract(r.record,'$.owner_id')=? AND r.state NOT IN ('reviewing','handling_feedback'))`, timestamp(), id)
 	if err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE inbox_items SET record=json_set(record,'$.state',(SELECT r.state FROM runs r WHERE r.id=json_extract(inbox_items.record,'$.run_id')))
- WHERE json_extract(record,'$.state') IN ('reviewing','queued') AND EXISTS(SELECT 1 FROM runs r WHERE r.id=json_extract(inbox_items.record,'$.run_id') AND json_extract(r.record,'$.owner_id')=? AND r.repository=inbox_items.repository AND r.actor_id=inbox_items.actor_id AND r.pull_id=inbox_items.pull_id AND r.state IN ('failed','cancelled','stale'))`, id)
+ WHERE json_extract(record,'$.state') IN ('reviewing','queued','handling_feedback') AND EXISTS(SELECT 1 FROM runs r WHERE r.id=json_extract(inbox_items.record,'$.run_id') AND json_extract(r.record,'$.owner_id')=? AND r.repository=inbox_items.repository AND r.actor_id=inbox_items.actor_id AND r.pull_id=inbox_items.pull_id AND r.state IN ('failed','cancelled','stale','feedback_pending'))`, id)
 	if err != nil {
 		return err
 	}

@@ -64,7 +64,17 @@ func superviseProcess(command *exec.Cmd, parent <-chan error, stop <-chan struct
 }
 
 func signalProcessGroup(group int, signal syscall.Signal) error {
-	return lifetime.SignalGroup(group, signal)
+	err := lifetime.SignalGroup(group, signal)
+	if errors.Is(err, syscall.EPERM) {
+		// Every signal edge, including escalation and deferred KILL, can race
+		// the last member's exit on Darwin. Only bounded proof that this
+		// still-reserved owned group cannot execute supersedes the denial.
+		if deadErr := waitProcessGroup(group, 3*time.Second); deadErr != nil {
+			return errors.Join(err, deadErr)
+		}
+		return nil
+	}
+	return err
 }
 
 func waitProcessGroup(group int, timeout time.Duration) error {

@@ -19,7 +19,7 @@ import (
 // Hold the parent unreaped while a real metadata scan races its exit. Darwin
 // returns EPERM for the resulting zombie-only group, not necessarily ESRCH.
 func TestCloseRechecksDarwinGroupAfterLastLiveMemberExits(t *testing.T) {
-	for _, state := range []string{"actual", "live", "unavailable"} {
+	for _, state := range []string{"actual", "transient", "live", "unavailable"} {
 		t.Run(state, func(t *testing.T) { closeDarwinGroupState(t, state) })
 	}
 }
@@ -53,6 +53,13 @@ if [ ! -e "$REVIEWD_TEST_SCAN_MARKER" ]; then
   [ "$ready" = true ]
 else
   case "$REVIEWD_TEST_POST_STATE" in
+    transient)
+      if [ ! -e "$REVIEWD_TEST_SCAN_MARKER.transient" ]; then
+        : > "$REVIEWD_TEST_SCAN_MARKER.transient"
+        printf '%s S\n' "$REVIEWD_TEST_TARGET_PID" > "$REVIEWD_TEST_CAPTURE"
+      else
+        /bin/ps "$@" > "$REVIEWD_TEST_CAPTURE"
+      fi;;
     live) printf '%s S\n' "$REVIEWD_TEST_TARGET_PID" > "$REVIEWD_TEST_CAPTURE";;
     unavailable) : > "$REVIEWD_TEST_POST_SCAN"; exit 1;;
     *) /bin/ps "$@" > "$REVIEWD_TEST_CAPTURE";;
@@ -97,7 +104,7 @@ fi
 	go func() { r.wait <- superviseProcess(command, parent, r.stop) }()
 	closed := make(chan error, 1)
 	go func() { closed <- r.Close() }()
-	if postState == "actual" {
+	if postState == "actual" || postState == "transient" {
 		select {
 		case <-reapReady:
 		case err := <-closed:
@@ -120,10 +127,10 @@ fi
 	var closeErr error
 	select {
 	case closeErr = <-closed:
-	case <-time.After(4 * time.Second):
+	case <-time.After(8 * time.Second):
 		t.Fatal("cleanup did not return")
 	}
-	if postState != "actual" {
+	if postState != "actual" && postState != "transient" {
 		if !errors.Is(closeErr, syscall.EPERM) {
 			t.Fatalf("uncertain/denied liveness lost signal failure: %v", closeErr)
 		}
@@ -137,5 +144,58 @@ fi
 	}
 	if _, err := os.Stat(private); !os.IsNotExist(err) {
 		t.Fatal("verified-dead runtime retained private state")
+	}
+}
+
+// Every signal edge in the runtime supervisor shares this boundary, including
+// escalation and deferred KILL. A held zombie guarantees a real Darwin EPERM;
+// only metadata is controlled to exercise transient versus uncertain liveness.
+func TestDarwinSignalsRequirePostDenialDeathProof(t *testing.T) {
+	for _, signal := range []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL} {
+		for _, state := range []string{"transient", "live", "unavailable"} {
+			t.Run(strconv.Itoa(int(signal))+"/"+state, func(t *testing.T) {
+				command := exec.CommandContext(context.Background(), "/bin/sleep", "0.05")
+				configureProcess(command)
+				if err := command.Start(); err != nil {
+					t.Fatal(err)
+				}
+				defer command.Wait()
+				if err := lifetime.WaitExited(command.Process.Pid); err != nil {
+					t.Fatal(err)
+				}
+				if err := syscall.Kill(-command.Process.Pid, 0); !errors.Is(err, syscall.EPERM) {
+					t.Fatalf("held owned zombie did not produce Darwin denial: %v", err)
+				}
+				root := t.TempDir()
+				script := `#!/bin/sh
+set -eu
+case "$REVIEWD_TEST_DENIAL_MODE" in
+ unavailable) exit 1;;
+ live) printf '%s S\n' "$REVIEWD_TEST_DENIAL_PID"; exit 0;;
+esac
+if [ ! -e "$REVIEWD_TEST_DENIAL_MARKER" ]; then
+ : > "$REVIEWD_TEST_DENIAL_MARKER"
+ printf '%s S\n' "$REVIEWD_TEST_DENIAL_PID"
+else
+ exec /bin/ps "$@"
+fi
+`
+				if err := os.WriteFile(filepath.Join(root, "ps"), []byte(script), 0700); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("PATH", root)
+				t.Setenv("REVIEWD_TEST_DENIAL_MODE", state)
+				t.Setenv("REVIEWD_TEST_DENIAL_PID", strconv.Itoa(command.Process.Pid))
+				t.Setenv("REVIEWD_TEST_DENIAL_MARKER", filepath.Join(root, "observed"))
+				err := signalProcessGroup(command.Process.Pid, signal)
+				if state == "transient" {
+					if err != nil {
+						t.Fatalf("proven subsequent shutdown retained signal denial: %v", err)
+					}
+				} else if !errors.Is(err, syscall.EPERM) {
+					t.Fatalf("live or unknown liveness lost signal denial: %v", err)
+				}
+			})
+		}
 	}
 }

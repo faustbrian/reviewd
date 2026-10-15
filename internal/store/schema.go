@@ -3,17 +3,33 @@ package store
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"time"
 )
 
 // One reserved connection owns the complete upgrade. Read the version only
 // after the write lock: another client may have upgraded while we waited.
-func migrate(ctx context.Context, db *sql.DB) error {
+func migrate(ctx context.Context, db *sql.DB) (err error) {
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
+	// SQLite's documented parent-table rebuild requires FK enforcement off
+	// on this one reserved connection, outside the transaction. Validate all
+	// references before commit and restore enforcement before pool reuse.
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
+		return errors.New("cannot prepare atomic state migration")
+	}
+	defer func() {
+		restore, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		if _, restoreErr := conn.ExecContext(restore, "PRAGMA foreign_keys=ON"); restoreErr != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			err = errors.Join(err, errors.New("cannot restore state reference enforcement; migration connection discarded"))
+		}
+	}()
 	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		return errors.New("cannot lock state schema for migration")
 	}
@@ -22,16 +38,29 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	if err := conn.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return errors.New("cannot read state database schema")
 	}
-	if version > 7 {
+	if version == 8 {
+		return nil
+	}
+	if version > 8 {
 		return errors.New("state database uses a newer schema; upgrade reviewd without replacing the database")
 	}
-	schemas := []string{runSchema, discoverySchema, notificationSchema, controlsSchema, inputSchema, ownerSchema, cooldownSchema}
+	schemas := []string{runSchema, discoverySchema, notificationSchema, controlsSchema, inputSchema, ownerSchema, cooldownSchema, feedbackSchema}
 	for index := version; index < len(schemas); index++ {
 		if _, err := conn.ExecContext(ctx, schemas[index]); err != nil {
 			return errors.New("cannot migrate durable state schema")
 		}
 	}
-	if _, err := conn.ExecContext(ctx, "PRAGMA user_version=7"); err != nil {
+	refs, checkErr := conn.QueryContext(ctx, "PRAGMA foreign_key_check")
+	if checkErr != nil {
+		return errors.New("cannot verify migrated state references")
+	}
+	invalid := refs.Next()
+	checkErr = refs.Err()
+	refs.Close()
+	if invalid || checkErr != nil {
+		return errors.New("state migration would leave an invalid referenced run")
+	}
+	if _, err := conn.ExecContext(ctx, "PRAGMA user_version=8"); err != nil {
 		return errors.New("cannot record state schema version")
 	}
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
@@ -96,3 +125,16 @@ UPDATE runs SET record=json_set(record,'$.inbox_item_id',
  AND i.repository=runs.repository AND i.actor_id=runs.actor_id AND i.pull_id=runs.pull_id))
 WHERE EXISTS(SELECT 1 FROM inbox_items i WHERE json_extract(i.record,'$.run_id')=runs.id
  AND i.repository=runs.repository AND i.actor_id=runs.actor_id AND i.pull_id=runs.pull_id);`
+
+const feedbackSchema = `CREATE TABLE runs_feedback (
+ id TEXT PRIMARY KEY, repository TEXT NOT NULL, repository_id INTEGER NOT NULL,
+ pull_id INTEGER NOT NULL, actor_id INTEGER NOT NULL, work_key TEXT NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('queued','waiting_checks','reviewing','prepared','publishing','published','publication_unknown','partial','failed','cancelled','stale','handling_feedback','feedback_pending','feedback_delivered')),
+ record TEXT NOT NULL CHECK(json_valid(record)), updated_at TEXT NOT NULL,
+ prepared TEXT CHECK(prepared IS NULL OR json_valid(prepared)), payload_id TEXT,
+ thread_id TEXT, turn_id TEXT, outcome TEXT CHECK(outcome IS NULL OR json_valid(outcome)), failure TEXT,
+ UNIQUE(repository,repository_id,pull_id,actor_id,work_key)
+);
+INSERT INTO runs_feedback SELECT * FROM runs;
+DROP TABLE runs;
+ALTER TABLE runs_feedback RENAME TO runs;`

@@ -84,6 +84,12 @@ func StartRuntime(ctx context.Context, options RuntimeOptions) (runtime *Runtime
 	if err != nil {
 		return nil, err
 	}
+	return startServer(ctx, executable, isolation, WorkerEnvironment(os.Environ(), isolation.Control))
+}
+
+// startServer shares transport and proven process ownership, not capabilities.
+// Callers supply an app-created private configuration and sealed environment.
+func startServer(ctx context.Context, executable string, isolation *Isolation, environment []string) (runtime *Runtime, err error) {
 	owned := &Runtime{isolation: isolation, wait: make(chan error, 1), stop: make(chan struct{})}
 	defer func() {
 		if err != nil && !errors.Is(err, lifetime.ErrCleanupUncertain) {
@@ -92,7 +98,7 @@ func StartRuntime(ctx context.Context, options RuntimeOptions) (runtime *Runtime
 	}()
 	command := exec.CommandContext(ctx, executable, WorkerArgs()...)
 	command.Dir = isolation.Workspace
-	command.Env = WorkerEnvironment(os.Environ(), isolation.Control)
+	command.Env = environment
 	configureProcess(command)
 	childInput, input, err := os.Pipe()
 	if err != nil {

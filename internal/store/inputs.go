@@ -39,7 +39,7 @@ func (s *Store) OpenInput(ctx context.Context, runID string, request clarificati
 	}
 	raw, _ := json.Marshal(Input{Request: request, RunID: runID, State: "pending"})
 	result, err := s.db.ExecContext(ctx, `INSERT INTO input_requests(id,run_id,record,state)
- SELECT ?,?,?,'pending' FROM runs WHERE id=? AND state='reviewing'
+ SELECT ?,?,?,'pending' FROM runs WHERE id=? AND state IN ('reviewing','handling_feedback')
  AND COALESCE(json_extract(record,'$.cancellation_requested'),0)=0
  AND COALESCE(json_extract(record,'$.superseded'),0)=0
  AND (?='specialist' OR (thread_id=? AND turn_id=?))`, request.ID, runID, string(raw), runID, request.Participant, request.ThreadID, request.TurnID)
@@ -85,7 +85,7 @@ func (s *Store) SelectInput(ctx context.Context, id string, answers clarificatio
 	answerJSON, _ := json.Marshal(answers)
 	selectedAt := timestamp()
 	result, err := s.db.ExecContext(ctx, `UPDATE input_requests SET state='selected',answers=?,selected_at=? WHERE id=? AND state='pending'
- AND EXISTS(SELECT 1 FROM runs WHERE runs.id=input_requests.run_id AND runs.state='reviewing'
+ AND EXISTS(SELECT 1 FROM runs WHERE runs.id=input_requests.run_id AND runs.state IN ('reviewing','handling_feedback')
  AND COALESCE(json_extract(runs.record,'$.cancellation_requested'),0)=0
  AND COALESCE(json_extract(runs.record,'$.superseded'),0)=0)`, string(answerJSON), selectedAt, id)
 	if err = changed(result, err, "clarification is no longer pending; inspect its exact target before answering"); err != nil {
@@ -102,7 +102,7 @@ func (s *Store) WaitInput(ctx context.Context, id string) (clarification.Answers
 		// Atomically take a selection once. No owner ever replays sending/sent data.
 		var raw string
 		err := s.db.QueryRowContext(ctx, `UPDATE input_requests SET state='sending' WHERE id=? AND state='selected'
- AND EXISTS(SELECT 1 FROM runs WHERE runs.id=input_requests.run_id AND runs.state='reviewing'
+ AND EXISTS(SELECT 1 FROM runs WHERE runs.id=input_requests.run_id AND runs.state IN ('reviewing','handling_feedback')
  AND COALESCE(json_extract(runs.record,'$.cancellation_requested'),0)=0
  AND COALESCE(json_extract(runs.record,'$.superseded'),0)=0) RETURNING answers`, id).Scan(&raw)
 		if err == nil {

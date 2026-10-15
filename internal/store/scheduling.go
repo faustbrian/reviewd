@@ -78,7 +78,7 @@ func (s *Store) RecoverScheduled(ctx context.Context) error {
 	// client may own it. RecoverPrivate classifies owner loss using kernel leases.
 	_, err = tx.ExecContext(ctx, `UPDATE inbox_items SET record=json_set(record,'$.state',
  (SELECT r.state FROM runs r WHERE r.id=json_extract(inbox_items.record,'$.run_id')))
- WHERE json_extract(record,'$.state') IN ('reviewing','waiting_checks','prepared','publishing','published','publication_unknown','partial','failed','cancelled','stale')
+ WHERE json_extract(record,'$.state') IN ('reviewing','waiting_checks','prepared','publishing','published','publication_unknown','partial','failed','cancelled','stale','handling_feedback','feedback_pending','feedback_delivered')
  AND EXISTS(SELECT 1 FROM runs r WHERE r.id=json_extract(inbox_items.record,'$.run_id')
  AND r.repository=inbox_items.repository AND r.actor_id=inbox_items.actor_id AND r.pull_id=inbox_items.pull_id
  AND NOT (json_extract(inbox_items.record,'$.state')='failed' AND COALESCE(json_extract(inbox_items.record,'$.attempts'),0)>=3 AND r.state IN ('prepared','waiting_checks')))`)
@@ -86,7 +86,7 @@ func (s *Store) RecoverScheduled(ctx context.Context) error {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE input_requests SET state=CASE WHEN state IN ('sending','sent') THEN 'delivery_unknown' ELSE 'closed' END,
- closed_at=?,reason='owner_lost' WHERE closed_at='' AND EXISTS(SELECT 1 FROM runs WHERE runs.id=input_requests.run_id AND runs.state!='reviewing')`, timestamp())
+ closed_at=?,reason='owner_lost' WHERE closed_at='' AND EXISTS(SELECT 1 FROM runs WHERE runs.id=input_requests.run_id AND runs.state NOT IN ('reviewing','handling_feedback'))`, timestamp())
 	if err != nil {
 		return err
 	}

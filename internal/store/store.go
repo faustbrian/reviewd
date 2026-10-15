@@ -21,6 +21,9 @@ import (
 type State string
 
 const (
+	HandlingFeedback   State = "handling_feedback"
+	FeedbackPending    State = "feedback_pending"
+	FeedbackDelivered  State = "feedback_delivered"
 	Queued             State = "queued"
 	WaitingChecks      State = "waiting_checks"
 	Reviewing          State = "reviewing"
@@ -35,39 +38,41 @@ const (
 )
 
 type Run struct {
-	OwnerID               string          `json:"owner_id,omitempty"`
-	OwnerClosed           bool            `json:"owner_closed,omitempty"`
-	Archive               *Archive        `json:"archive,omitempty"`
-	Inputs                []Input         `json:"inputs,omitempty"`
-	ID                    string          `json:"id"`
-	InboxItemID           string          `json:"inbox_item_id,omitempty"`
-	CancellationRequested bool            `json:"cancellation_requested,omitempty"`
-	Superseded            bool            `json:"superseded,omitempty"`
-	Repository            string          `json:"repository"`
-	RepositoryID          int64           `json:"repository_id"`
-	PullID                int64           `json:"pull_id"`
-	Number                int             `json:"number"`
-	ActorID               int64           `json:"actor_id"`
-	ActorLogin            string          `json:"actor_login"`
-	WorkKey               string          `json:"work_key"`
-	State                 State           `json:"state"`
-	Private               bool            `json:"private"`
-	Configuration         json.RawMessage `json:"configuration"`
-	Context               json.RawMessage `json:"context,omitempty"`
-	SkillDigest           string          `json:"skill_digest,omitempty"`
-	CreatedAt             time.Time       `json:"created_at"`
-	UpdatedAt             time.Time       `json:"updated_at"`
-	ThreadID              string          `json:"thread_id,omitempty"`
-	TurnID                string          `json:"turn_id,omitempty"`
-	PayloadID             string          `json:"payload_id,omitempty"`
-	Prepared              json.RawMessage `json:"prepared,omitempty"`
-	Outcome               json.RawMessage `json:"outcome,omitempty"`
-	Failure               string          `json:"failure,omitempty"`
-	RequestedModel        string          `json:"requested_model,omitempty"`
-	EffectiveModel        string          `json:"effective_model,omitempty"`
-	Usage                 json.RawMessage `json:"usage,omitempty"`
-	Specialists           json.RawMessage `json:"specialists,omitempty"`
-	Progress              string          `json:"progress,omitempty"`
+	Purpose               string            `json:"purpose,omitempty"`
+	PriorExecutions       []json.RawMessage `json:"prior_executions,omitempty"`
+	OwnerID               string            `json:"owner_id,omitempty"`
+	OwnerClosed           bool              `json:"owner_closed,omitempty"`
+	Archive               *Archive          `json:"archive,omitempty"`
+	Inputs                []Input           `json:"inputs,omitempty"`
+	ID                    string            `json:"id"`
+	InboxItemID           string            `json:"inbox_item_id,omitempty"`
+	CancellationRequested bool              `json:"cancellation_requested,omitempty"`
+	Superseded            bool              `json:"superseded,omitempty"`
+	Repository            string            `json:"repository"`
+	RepositoryID          int64             `json:"repository_id"`
+	PullID                int64             `json:"pull_id"`
+	Number                int               `json:"number"`
+	ActorID               int64             `json:"actor_id"`
+	ActorLogin            string            `json:"actor_login"`
+	WorkKey               string            `json:"work_key"`
+	State                 State             `json:"state"`
+	Private               bool              `json:"private"`
+	Configuration         json.RawMessage   `json:"configuration"`
+	Context               json.RawMessage   `json:"context,omitempty"`
+	SkillDigest           string            `json:"skill_digest,omitempty"`
+	CreatedAt             time.Time         `json:"created_at"`
+	UpdatedAt             time.Time         `json:"updated_at"`
+	ThreadID              string            `json:"thread_id,omitempty"`
+	TurnID                string            `json:"turn_id,omitempty"`
+	PayloadID             string            `json:"payload_id,omitempty"`
+	Prepared              json.RawMessage   `json:"prepared,omitempty"`
+	Outcome               json.RawMessage   `json:"outcome,omitempty"`
+	Failure               string            `json:"failure,omitempty"`
+	RequestedModel        string            `json:"requested_model,omitempty"`
+	EffectiveModel        string            `json:"effective_model,omitempty"`
+	Usage                 json.RawMessage   `json:"usage,omitempty"`
+	Specialists           json.RawMessage   `json:"specialists,omitempty"`
+	Progress              string            `json:"progress,omitempty"`
 }
 type Store struct {
 	db        *sql.DB
@@ -124,7 +129,7 @@ func Open(ctx context.Context, directory string) (store *Store, err error) {
 }
 
 func (s *Store) WaitForChecks(ctx context.Context, id string) error {
-	result, err := s.db.ExecContext(ctx, "UPDATE runs SET state='waiting_checks',updated_at=? WHERE id=? AND state='queued'", timestamp(), id)
+	result, err := s.db.ExecContext(ctx, "UPDATE runs SET state='waiting_checks',updated_at=? WHERE id=? AND state='queued' AND COALESCE(json_extract(record,'$.purpose'),'review')!='feedback'", timestamp(), id)
 	return changed(result, err, "could not persist waiting-for-checks review")
 }
 
@@ -140,7 +145,7 @@ func (s *Store) RecordWorker(ctx context.Context, id, thread, turn, requested, e
 	if !json.Valid(usage) || !json.Valid(specialists) {
 		return errors.New("worker metadata was not valid JSON")
 	}
-	result, err := s.db.ExecContext(ctx, "UPDATE runs SET thread_id=?,turn_id=?,record=json_set(record,'$.requested_model',?,'$.effective_model',?,'$.usage',json(?),'$.specialists',json(?)),updated_at=? WHERE id=? AND state IN ('reviewing','prepared')", thread, turn, requested, effective, string(usage), string(specialists), timestamp(), id)
+	result, err := s.db.ExecContext(ctx, "UPDATE runs SET thread_id=?,turn_id=?,record=json_set(record,'$.requested_model',?,'$.effective_model',?,'$.usage',json(?),'$.specialists',json(?)),updated_at=? WHERE id=? AND state IN ('reviewing','prepared','handling_feedback')", thread, turn, requested, effective, string(usage), string(specialists), timestamp(), id)
 	return changed(result, err, "could not persist worker execution identity")
 }
 func (s *Store) Close() error { return s.db.Close() }
@@ -164,7 +169,7 @@ func (s *Store) CreateForItem(ctx context.Context, run Run, item InboxItem) (Run
 }
 
 func (s *Store) create(ctx context.Context, run Run, item *InboxItem) (Run, bool, error) {
-	if run.Repository == "" || run.RepositoryID <= 0 || run.PullID <= 0 || run.Number < 1 || run.ActorID <= 0 || run.ActorLogin == "" || run.WorkKey == "" || run.State != Queued || !json.Valid(run.Configuration) || (len(run.Context) > 0 && !json.Valid(run.Context)) {
+	if run.Repository == "" || run.RepositoryID <= 0 || run.PullID <= 0 || run.Number < 1 || run.ActorID <= 0 || run.ActorLogin == "" || run.WorkKey == "" || (run.Purpose != "" && run.Purpose != "review" && run.Purpose != "feedback") || run.State != Queued || !json.Valid(run.Configuration) || (len(run.Context) > 0 && !json.Valid(run.Context)) {
 		return Run{}, false, errors.New("run requires complete scope, frozen policy and queued state")
 	}
 	var err error
@@ -217,6 +222,9 @@ func (s *Store) create(ctx context.Context, run Run, item *InboxItem) (Run, bool
 		if item != nil {
 			current.RunID = run.ID
 			current.State = "reviewing"
+			if run.Purpose == "feedback" {
+				current.State = "handling_feedback"
+			}
 			current.UpdatedAt = run.UpdatedAt
 			raw, _ := json.Marshal(current)
 			if _, err := tx.ExecContext(ctx, "UPDATE inbox_items SET record=? WHERE id=?", string(raw), current.ID); err != nil {
@@ -297,7 +305,7 @@ func (s *Store) List(ctx context.Context) ([]Run, error) {
 	return runs, nil
 }
 func (s *Store) Claim(ctx context.Context, id string) (bool, error) {
-	result, err := s.db.ExecContext(ctx, "UPDATE runs SET state='reviewing',updated_at=? WHERE id=? AND state='queued'", timestamp(), id)
+	result, err := s.db.ExecContext(ctx, "UPDATE runs SET state='reviewing',updated_at=? WHERE id=? AND state='queued' AND COALESCE(json_extract(record,'$.purpose'),'review')!='feedback'", timestamp(), id)
 	if err != nil {
 		return false, errors.New("could not claim queued review work")
 	}

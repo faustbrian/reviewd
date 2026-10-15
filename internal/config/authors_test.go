@@ -93,6 +93,12 @@ func TestLegacySnapshotRetainsBytesAndSafeAuthorDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	values, origins := policy.Values(), policy.Provenance()
+	for key := range values {
+		if feedbackSetting(key) {
+			delete(values, key)
+			delete(origins, key)
+		}
+	}
 	delete(values, "reviewer.exclude_authors")
 	delete(origins, "reviewer.exclude_authors")
 	fingerprint, err := snapshotHash(policy.Repository, values)

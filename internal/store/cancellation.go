@@ -17,7 +17,7 @@ func (s *Store) RequestCancellation(ctx context.Context, id string) (Run, error)
  record=json_set(record,'$.cancellation_requested',json('true')),
  state=CASE WHEN state IN ('queued','waiting_checks') THEN 'cancelled' ELSE state END,
  failure=CASE WHEN state IN ('queued','waiting_checks') THEN 'Cancelled before a private model turn started.' ELSE failure END,
- updated_at=? WHERE id=? AND state IN ('queued','waiting_checks','reviewing','cancelled')`, timestamp(), id)
+ updated_at=? WHERE id=? AND state IN ('queued','waiting_checks','reviewing','handling_feedback','cancelled')`, timestamp(), id)
 	if err != nil {
 		return Run{}, errors.New("cannot record scoped cancellation request")
 	}
