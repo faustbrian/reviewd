@@ -123,9 +123,16 @@ try:
  wait_for('Running')
  wait_for('Publication')
  wait_for('café')
- send(b's'); wait_for('Start private review')
- if mode=='dismiss':
+ if mode.startswith('feedback'):
+  send(b'h'); wait_for('Handle PR feedback'); wait_for('Fix/commit/push/GitHub')
+ else:
+  send(b's'); wait_for('Start private review')
+ if mode in ('dismiss','feedback-dismiss'):
   send(b'\x1b'); time.sleep(.15); send(b'q')
+ elif mode=='feedback':
+  send(b'm'); wait_for('Feedback model (enter'); send(b'fixture-feedback-model\r')
+  send(b'e'); wait_for('Reasoning effort'); send(b'low\r')
+  send(b'y'); wait_for('Feedback permission queued'); send(b'q')
  elif mode=='start':
   send(b'm'); wait_for('Reviewer model'); send(b'fixture-review-model\r')
   send(b'e'); wait_for('Reasoning effort'); send(b'low\r')
@@ -150,20 +157,28 @@ finally:
   p.kill(); p.wait()
  os.close(master); os.close(slave)
 `
-	for _, mode := range []string{"dismiss", "interrupt", "start"} {
+	for _, mode := range []string{"dismiss", "interrupt", "start", "feedback-dismiss", "feedback"} {
 		t.Run(mode, func(t *testing.T) {
-			command := exec.Command("python3", "-c", program, binary, path, mode)
+			runPath, runStore, runItem := path, s, item
+			if strings.HasPrefix(mode, "feedback") {
+				runPath, runStore, runItem = feedbackDecisionFixture(t)
+			}
+			command := exec.Command("python3", "-c", program, binary, runPath, mode)
 			if output, err := command.CombinedOutput(); err != nil {
 				t.Fatalf("native terminal journey: %v %s", err, output)
 			}
-			items, _, err := s.Inbox(context.Background())
-			if err != nil || len(items) != 1 || items[0].ID != item.ID {
+			items, _, err := runStore.Inbox(context.Background())
+			if err != nil || len(items) != 1 || items[0].ID != runItem.ID {
 				t.Fatal("terminal journey lost durable item")
 			}
 			current := items[0]
 			if mode == "start" {
 				if current.State != "queued" || !current.Manual || current.Overrides["reviewer.model"] != "fixture-review-model" || current.Overrides["reviewer.reasoning_effort"] != "low" {
 					t.Fatalf("terminal confirmation lost selected overrides or exact decision: %+v", current)
+				}
+			} else if mode == "feedback" {
+				if current.State != "queued" || !current.Manual || current.Overrides["feedback.model"] != "fixture-feedback-model" || current.Overrides["feedback.reasoning_effort"] != "low" || current.Overrides["reviewer.model"] != nil {
+					t.Fatalf("terminal feedback confirmation lost its independent decision: %+v", current)
 				}
 			} else if current.State != "pending_decision" || current.DecisionID != "" {
 				t.Fatal("dismissal or interrupt granted consent")

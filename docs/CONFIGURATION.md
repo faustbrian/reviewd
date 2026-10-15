@@ -225,14 +225,26 @@ repository `.reviewd` or command-line override. Agent model/effort, installed
 `feedback.skill` (default `handle-pr-feedback`), `feedback.skill_path`, and
 `limits.feedback_timeout` (default `60m`) are independent of the private reviewer.
 
-**Current execution boundary:** discovery and typed admission are available;
-the modifying executor and its full-scope confirmation are not connected.
+**Explicit manual permission:** `reviewd feedback <item-id>` previews the PR
+head, base, human-feedback inventory, selected feedback model/effort and full
+fix/commit/push/GitHub scope without recording a decision. Repeat the displayed
+command with `--confirm <confirmation>` to authorize only that exact target.
+`--json` exposes the same preview and confirmation identity for scripts.
+`--model` and `--reasoning-effort` on this command select `feedback.*`, not the
+private reviewer. Neither flag authorizes automatic fixing or expands authors.
+The terminal's `h` choice and explicit `y` confirmation use the same decision.
+A changed head, base or human-feedback inventory requires a new preview.
+Existing linked runs require reconciliation rather than a replacement decision.
+
+**Current execution boundary:** discovery, manual permission and typed admission
+are available; the modifying executor is not connected.
 Automatic feedback items are held with a durable availability diagnostic in
 JSON/plain/terminal inboxes and notifications, never sent to the private
 reviewer. This hold does not count as synchronization failure or stop unrelated
 watching; genuine acquisition/storage failures retain their normal behavior.
 `reviewd start` continues to
-authorize private reviewing only and rejects this category. Configuring `auto`
+authorize private reviewing only and rejects this category. Manual permission
+queues work for a watcher but does not itself start a worker. Configuring `auto`
 does not currently perform fixes, commits, pushes, metadata changes, replies,
 thread resolution, or renewed reviewer requests.
 

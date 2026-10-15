@@ -95,6 +95,8 @@ func (e *execution) terminalSnapshot(ctx context.Context, durable *store.Store, 
 		entry := terminal.Entry{Section: "owed"}
 		var text strings.Builder
 		if item != nil {
+			entry.ExecutionKind = item.ExecutionKind
+			entry.FeedbackConfirmation = feedbackConfirmation(*item)
 			entry.Key, entry.ItemID, entry.EventKey = "item:"+item.ID, item.ID, item.EventKey
 			entry.Project, entry.State, entry.RunID = item.Repository, item.State, item.RunID
 			entry.Title = fmt.Sprintf("%s #%d %s", strings.TrimPrefix(item.Repository, "github.com/"), item.Number, item.Title)
@@ -113,7 +115,7 @@ func (e *execution) terminalSnapshot(ctx context.Context, durable *store.Store, 
 			}
 			entry.Model, entry.Effort = policy.String(prefix+"model"), policy.String(prefix+"reasoning_effort")
 			if feedback {
-				fmt.Fprintf(&text, "Operator/project defaults: %s / %s\nThis is the separate feedback-handling workflow. It needs its own executor and fixing/commit/push/GitHub confirmation; private-review start does not grant those permissions.\n", entry.Model, entry.Effort)
+				fmt.Fprintf(&text, "Operator/project defaults: %s / %s\nThis is the separate feedback-handling workflow.\n%s\nEvent: %s\nHuman feedback: %s\nUse h for explicit confirmation. Queued work remains held while its executor is unavailable; private-review start never grants these permissions.\n", entry.Model, entry.Effort, feedbackScope, item.EventKey, item.ContextKey)
 			} else {
 				fmt.Fprintf(&text, "Operator/project defaults: %s / %s\nPublication policy: %s\nTrusted repository preferences are resolved at review start.\n", entry.Model, entry.Effort, policy.String("actions.publish_review"))
 			}
@@ -252,6 +254,18 @@ func terminalAction(ctx context.Context, base []string, action terminal.Action, 
 			}
 			message = "Private review queued; publication remains a separate decision."
 		}
+	case "feedback":
+		if entry.ItemID == "" || entry.ExecutionKind != "feedback_v1" || entry.FeedbackConfirmation == "" {
+			return "", errors.New("select an exact displayed feedback target for its separate full-scope confirmation")
+		}
+		args = []string{"feedback", entry.ItemID, "--confirm", entry.FeedbackConfirmation}
+		if action.Model != "" {
+			args = append(args, "--model", action.Model)
+		}
+		if action.Effort != "" {
+			args = append(args, "--reasoning-effort", action.Effort)
+		}
+		message = "Feedback permission queued for the displayed target; unavailable execution remains held. No delivery is implied."
 	case "publish", "repair":
 		if entry.RunID == "" || entry.PayloadID == "" {
 			return "", errors.New("select an exact prepared preview")

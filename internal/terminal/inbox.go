@@ -19,6 +19,7 @@ import (
 )
 
 type Entry struct {
+	ExecutionKind, FeedbackConfirmation         string
 	InputID                                     string
 	Questions                                   []clarification.Question
 	Key, Section, Title, Details                string
@@ -276,9 +277,13 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 					m.status = "Resize to at least 24×10 to confirm, or use ordinary commands."
 					return m, nil
 				}
+				if m.pending.Kind == "feedback" && m.bodyHeight() == 0 {
+					m.status = "Resize until the captured feedback details can be inspected, or use the ordinary feedback command."
+					return m, nil
+				}
 				return m, m.execute(*m.pending)
 			case "m", "e":
-				if m.pending.Kind == "start" {
+				if m.pending.Kind == "start" || m.pending.Kind == "feedback" {
 					m.editing, m.text = map[string]string{"m": "model", "e": "effort"}[key], ""
 				}
 			case "w":
@@ -349,7 +354,17 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				action.Answers = clarification.Answers{Answers: map[string]clarification.Answer{}}
 				m.editing, m.text, m.questionIndex = "answer", "", 0
 			case "s":
+				if entry.ExecutionKind != "" {
+					m.status = "Private start cannot authorize feedback fixing; use h for its separate confirmation."
+					return m, nil
+				}
 				action.Kind = "start"
+			case "h":
+				if entry.ExecutionKind != "feedback_v1" || entry.FeedbackConfirmation == "" || entry.RunID != "" {
+					m.status = "Select unstarted typed feedback; existing runs require reconciliation, not replacement."
+					return m, nil
+				}
+				action.Kind = "feedback"
 			case "x":
 				action.Kind = "skip"
 			case "p":
@@ -405,7 +420,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 func needsItem(kind string) bool {
 	switch kind {
-	case "start", "skip", "snooze", "snooze-head", "unsnooze", "follow", "unfollow":
+	case "start", "feedback", "skip", "snooze", "snooze-head", "unsnooze", "follow", "unfollow":
 		return true
 	}
 	return false
@@ -472,7 +487,10 @@ func (m *model) header() []string {
 		entry := m.pending.Entry
 		heading := map[string]string{"answer": "Answer exact private clarification", "start": "Start private review", "skip": "Skip displayed event", "publish": "Publish exact preview", "repair": "Repair one missing inline finding", "cancel": "Request run cancellation", "pause": "Pause project", "resume": "Resume project", "snooze": "Snooze inbox category", "snooze-head": "Snooze until new commits", "unsnooze": "Release snooze", "follow": "Follow PR", "unfollow": "Stop following PR"}[m.pending.Kind]
 		lines = append(lines, line(heading+": "+entry.Title))
-		if m.pending.Kind == "start" {
+		if m.pending.Kind == "feedback" {
+			lines[len(lines)-1] = line("Handle PR feedback: " + entry.Title)
+		}
+		if m.pending.Kind == "start" || m.pending.Kind == "feedback" {
 			model, effort := m.pending.Model, m.pending.Effort
 			if model == "" {
 				model = entry.Model
@@ -480,7 +498,15 @@ func (m *model) header() []string {
 			if effort == "" {
 				effort = entry.Effort
 			}
-			lines = append(lines, line(fmt.Sprintf("Model %s / %s; review now: %t", model, effort, m.pending.Now)), line("m model · e effort · w review-now · y confirm · n/esc cancel"))
+			if m.pending.Kind == "feedback" {
+				controls := "m model · e effort · y authorize feedback scope · n/esc cancel"
+				if width < 65 {
+					controls = "y confirm · n cancel"
+				}
+				lines = append(lines, line("Fix/commit/push/GitHub"), line("No merge/force/bypass"), line(fmt.Sprintf("Feedback model %s / %s", model, effort)), line(controls))
+			} else {
+				lines = append(lines, line(fmt.Sprintf("Model %s / %s; review now: %t", model, effort, m.pending.Now)), line("m model · e effort · w review-now · y confirm · n/esc cancel"))
+			}
 		} else if m.pending.Kind == "answer" {
 			lines = append(lines, line("Textual clarification only; never execution or publication consent."))
 			if m.editing == "answer" {
@@ -500,6 +526,9 @@ func (m *model) header() []string {
 		}
 		if m.editing != "" && m.editing != "answer" {
 			label := map[string]string{"model": "Reviewer model", "effort": "Reasoning effort", "duration": "Snooze duration"}[m.editing]
+			if m.editing == "model" && m.pending.Kind == "feedback" {
+				label = "Feedback model"
+			}
 			lines = append(lines, line(label+" (enter saves; blank keeps project default): "+m.text))
 		}
 	}
@@ -556,7 +585,7 @@ func (m *model) View() tea.View {
 	width, height := max(1, m.width), max(1, m.height)
 	line := func(text string) string { return clipped(text, width) }
 	lines := m.header()
-	footer := "↑/↓ select · enter details · s start · p publish · ? help · q detach"
+	footer := "↑/↓ select · enter details · s review · h feedback · p publish · ? help · q detach"
 	if width < 65 {
 		footer = "enter details · ? help · q detach"
 	}
@@ -603,6 +632,8 @@ const help = `Navigation: arrows/j/k, Home/End, PgUp/PgDn; enter details, esc ba
 i answer a pending private clarification row (Enter advances, y confirms).
 s start PRIVATE review; m/e in its confirmation select one-run model/effort;
 w in that confirmation opts into review-now with readiness gaps retained.
+h handle typed feedback: separate fix/commit/push/GitHub scope confirmation;
+m/e select that run's feedback model/effort. An unavailable executor holds it.
 x skip the captured event; f follow; F stop following.
 p publish the exact captured preview; P explicitly repair one missing finding.
 v refresh checks without another model turn; g reconcile an existing submission.

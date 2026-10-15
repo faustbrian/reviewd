@@ -132,7 +132,7 @@ func Run(ctx context.Context, args []string, output, diagnostics io.Writer, deps
 	flags.StringVar(&options.path, "config", "", "Explicit global configuration path")
 	flags.StringVar(&options.profile, "profile", "default", "Named local profile")
 	flags.BoolVar(&options.json, "json", false, "Emit stable JSON without presentation text")
-	flags.StringVar(&options.model, "model", "", "Override the reviewer model for this command")
+	flags.StringVar(&options.model, "model", "", "Override this command's agent model (private reviewer or feedback handler)")
 	flags.StringVar(&options.effort, "reasoning-effort", "", "Override reasoning effort for this command")
 	configure := &cobra.Command{Use: "config", Short: "Inspect effective configuration"}
 	offline := false
@@ -218,6 +218,7 @@ func Run(ctx context.Context, args []string, output, diagnostics io.Writer, deps
 	root.AddCommand(options.doctorCommand(deps), options.initCommand(deps))
 	root.AddCommand(options.reviewCommand(deps), options.refreshCommand(deps), options.publishCommand(deps), options.showCommand(), options.inboxCommand(deps), options.syncCommand(deps), options.followCommand(true), options.followCommand(false), options.watchCommand(deps))
 	root.AddCommand(options.decisionCommand(true), options.decisionCommand(false), options.projectPauseCommand(true), options.projectPauseCommand(false), options.snoozeCommand(), options.unsnoozeCommand())
+	root.AddCommand(options.feedbackCommand())
 	root.AddCommand(options.cancelCommand(), options.openCommand(deps), options.inputsCommand(), options.answerCommand())
 	root.AddCommand(options.cleanupCommand(), options.recoveryCommand())
 	completion := &cobra.Command{Use: "completion <bash|zsh|fish>", Short: "Print shell completion without installing it", Args: cobra.ExactArgs(1)}

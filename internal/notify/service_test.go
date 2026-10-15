@@ -74,7 +74,7 @@ func TestFeedbackNotificationCannotProposePrivateReviewConsent(t *testing.T) {
 	if err := service.Pump(ctx, doc, false); err != nil {
 		t.Fatal(err)
 	}
-	if len(messages) != 1 || !strings.Contains(messages[0].Body, "feedback") || strings.Contains(messages[0].Body, "reviewd start") {
+	if len(messages) != 1 || !strings.Contains(messages[0].Body, "reviewd feedback ") || strings.Contains(messages[0].Body, "reviewd start") {
 		t.Fatalf("fixing event suggested private consent: %+v", messages)
 	}
 	item.State = "queued"

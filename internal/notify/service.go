@@ -120,7 +120,7 @@ func (s *Service) Pump(ctx context.Context, document *config.Document, force boo
 			body = "Review work needs attention; inspect reviewd inbox."
 		}
 		if item.Category == "feedback_handling" || item.ExecutionKind == "feedback_v1" {
-			body = "Incoming feedback for the separate feedback-handling workflow; inspect reviewd inbox. Private-review start does not authorize fixes."
+			body = "Incoming feedback; use reviewd feedback " + item.ID + " to preview separate fixing permissions. Private-review start does not authorize fixes."
 			if item.State == "failed" {
 				body = "Feedback handling needs attention; inspect reviewd inbox and its linked run before deciding again."
 			}

@@ -528,6 +528,9 @@ func (s *Store) decideItem(ctx context.Context, id string, start, now bool, over
 		return item, errors.New("item is ineligible or already running; inspect its current run")
 	}
 	if item.RunID != "" {
+		if feedback != nil {
+			return item, errors.New("feedback already has a linked run; inspect and explicitly reconcile its existing effects instead of authorizing a replacement")
+		}
 		var state State
 		if err := tx.QueryRowContext(ctx, "SELECT state FROM runs WHERE id=? AND repository=? AND actor_id=? AND pull_id=?", item.RunID, item.Repository, item.ActorID, item.PullID).Scan(&state); err != nil {
 			return item, errors.New("linked review run is unavailable; inspect its durable state before deciding")

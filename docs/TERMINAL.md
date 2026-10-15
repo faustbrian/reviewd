@@ -35,7 +35,9 @@ configuration; trusted repository preferences are acquired at review start.
 | Enter / Escape | Details / back or dismiss a choice |
 | Home, End, PgUp, PgDn | Navigate long lists/details |
 | `s` | Confirm a private review of the displayed event |
-| `m`, `e`, `w` in that confirmation | One-run model, effort, review-now |
+| `h` | Preview and confirm separate feedback fix/commit/push/GitHub permissions |
+| `m`, `e` in either start confirmation | One-run model and effort for that workflow |
+| `w` in private-review confirmation | Review now, retaining readiness gaps |
 | `x` | Confirm skipping the displayed event |
 | `p` | Inspect and confirm the exact captured publication preview |
 | `P` | Explicitly repair one missing inline finding |
@@ -56,7 +58,16 @@ when the inbox refreshes. The publisher still revalidates current evidence;
 a changed result needs a new explicit decision. A start/skip confirmation is
 bound to its displayed event, not whichever newer revision now occupies its row.
 Scripts can use the same guard with `start`/`skip --event <event_key>` from inbox
-JSON. The UI does not grant code-fixing or thread-resolution authority.
+JSON. Typed feedback uses a separate `h` / `y` decision, bound to the displayed
+head, base and human-feedback inventory as well as its event. It grants verified
+fixes, normal commit hooks/signing, additive ordinary existing-branch push,
+necessary metadata, original replies, settled resolutions and renewed reviewer
+requests—not merging, deployment, force-push or bypasses. Its `m`/`e` choices
+select the feedback model/effort independently of private reviewing. A changed
+target is rejected; existing linked runs require reconciliation. Until a
+modifying executor is connected, confirmed work remains visibly held and no
+fixes or remote effects are performed. The ordinary CLI equivalent is
+`reviewd feedback <item-id>` followed by its displayed `--confirm` command.
 
 Detaching an inbox does not stop a separate watcher. Detaching a `watch` you
 started in that terminal stops its owned foreground watcher and joins its work;

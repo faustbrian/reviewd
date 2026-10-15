@@ -158,6 +158,42 @@ func TestFeedbackResumeWaitsForProvenOwnerClosureAndRetainsPriorExecution(t *tes
 	}
 }
 
+func TestFeedbackNewDecisionCannotDetachPendingEffectsFromExistingRun(t *testing.T) {
+	s, item := feedbackSchedulingFixture(t)
+	ctx := context.Background()
+	owner, err := s.BeginPrivateOwner(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	run, _, err := s.CreateForItem(ctx, Run{Purpose: "feedback", OwnerID: owner.ID, Repository: item.Repository, RepositoryID: 99, PullID: item.PullID, Number: item.Number, ActorID: item.ActorID, ActorLogin: "reviewer", WorkKey: "pending-effects-choice", State: Queued, Configuration: json.RawMessage(`{}`)}, item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := s.ClaimFeedback(ctx, run.ID); err != nil || !claimed {
+		t.Fatal("claim", err)
+	}
+	journal := json.RawMessage(`{"effects":[{"kind":"reply","state":"unknown"}]}`)
+	if err := s.FinishFeedback(ctx, run.ID, FeedbackPending, journal, "reconcile original reply"); err != nil {
+		t.Fatal(err)
+	}
+	scope, err := s.DiscoveryScope(ctx, item.Repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ApplyDiscovery(ctx, scope, scope, []Observation{{PullID: item.PullID, Number: item.Number, Record: json.RawMessage(`{}`)}}, []InboxItem{item}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DecideFeedbackItem(ctx, item.ID, nil, FeedbackDecision{EventKey: item.EventKey, HeadSHA: item.HeadSHA, TargetBaseSHA: item.TargetBaseSHA, ContextKey: item.ContextKey}); err == nil {
+		t.Fatal("new decision detached a pending effect journal instead of requiring explicit reconciliation")
+	}
+	items, _, err := s.Inbox(ctx)
+	actual, getErr := s.Get(ctx, run.ID)
+	if err != nil || getErr != nil || len(items) != 1 || items[0].RunID != run.ID || string(actual.Outcome) != string(journal) {
+		t.Fatal("rejected decision lost original delivery facts")
+	}
+}
+
 func TestStaleFeedbackResumeCannotEraseInterveningExecutionAfterABA(t *testing.T) {
 	s, item := feedbackSchedulingFixture(t)
 	ctx := context.Background()

@@ -99,6 +99,14 @@ author exclusions do not revoke this lane; its own author filter and automatic
 action policy do, including during GitHub cooldowns. This does not yet establish
 operational fixing or any remote delivery.
 
+`reviewd feedback <item-id>` previews the separate full-scope permission and
+returns a confirmation identity bound to the displayed event, PR head, base
+and human-feedback inventory. Without `--confirm <identity>` it records no
+decision. Confirmation queues that exact work; it does not start a worker or
+bypass an unavailable executor. Use the displayed command, or JSON fields for
+headless clients. Existing linked runs and their effect journals cannot be
+replaced by a new manual decision. Private `start` never grants this scope.
+
 SQLite schema 2 adds discovery observations, status, inbox items, and follow
 preferences without replacing existing private previews or publication facts.
 An older executable may refuse the newer schema; upgrade it rather than deleting
