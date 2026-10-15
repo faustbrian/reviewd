@@ -105,6 +105,15 @@ func open(ctx context.Context, directory string, create bool) (store *Store, err
 	if err != nil || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
 		return nil, errors.New("state.directory must be a private directory (mode 0700), not a symlink; choose a private profile location")
 	}
+	// Admit the final private directory before resolving ancestor aliases such
+	// as macOS /var -> /private/var. Every owner and retained child must then
+	// inherit one spelling; resolving first would accept a final profile link.
+	canonical, resolveErr := filepath.EvalSymlinks(directory)
+	canonicalInfo, statErr := os.Lstat(canonical)
+	if resolveErr != nil || statErr != nil || !canonicalInfo.IsDir() || canonicalInfo.Mode().Perm()&0077 != 0 || !os.SameFile(info, canonicalInfo) {
+		return nil, errors.New("private local state directory identity changed during admission")
+	}
+	directory = canonical
 	path := filepath.Join(directory, "reviewd.sqlite")
 	if create {
 		file, createErr := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)

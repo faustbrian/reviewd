@@ -386,3 +386,77 @@ func TestModifierAbruptOwnerExitRetainsLiveChildAndDeliveredFacts(t *testing.T) 
 		t.Fatal("proven dead private scope was not cleaned", err)
 	}
 }
+
+func TestModifierLegacyAncestorAliasKeepsTheAuthoritativePendingRun(t *testing.T) {
+	ctx := context.Background()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	physical := filepath.Join(root, "physical")
+	alias := filepath.Join(root, "alias")
+	if err := os.Mkdir(physical, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(physical, alias); err != nil {
+		t.Fatal(err)
+	}
+	key := ModifierKey{Host: "github.com", RepositoryID: 19, PullID: 71}
+	locks := filepath.Join(root, "shared")
+	first, err := AcquireModifier(ctx, locks, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	s, owner, run := modifierRun(t, filepath.Join(physical, "profile"), key)
+	defer s.Close()
+	defer owner.Close()
+	if err := first.Attach(ctx, s, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if won, err := s.ClaimFeedback(ctx, run.ID); err != nil || !won {
+		t.Fatal("claim", err)
+	}
+	if err := owner.KeepFeedbackWorkspace(ctx, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	pending := filepath.Join(owner.Root, "pending.txt")
+	if err := os.WriteFile(pending, []byte("pending fix"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	outcome := json.RawMessage(`{"effects":[{"kind":"reply","state":"verified","id":719}]}`)
+	if err := s.FinishFeedback(ctx, run.ID, store.Partial, outcome, "resume"); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.SuspendFeedback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// An existing schema-1 client persisted the profile's ancestor-aliased spelling.
+	pointer := filepath.Join(locks, modifierName(key)+".json")
+	record := modifierRecord{Schema: 1, Key: key, Profile: filepath.Join(alias, "profile"), RunID: run.ID}
+	data, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pointer, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	next, err := AcquireModifier(ctx, locks, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer next.Close()
+	if next.Prior == nil || next.Prior.Profile != s.Directory() || next.Prior.Run.ID != run.ID || next.Prior.Run.OwnerID != owner.ID || next.Prior.Run.State != store.Partial || string(next.Prior.Run.Outcome) != string(outcome) {
+		t.Fatal("legacy ancestor alias lost the same authoritative pending profile/run")
+	}
+	persisted, err := os.ReadFile(pointer)
+	if err != nil || string(persisted) != string(data) {
+		t.Fatal("admission rewrote the legacy pointer", err)
+	}
+	if contents, err := os.ReadFile(pending); err != nil || string(contents) != "pending fix" {
+		t.Fatal("admission removed unpublished work", err)
+	}
+}

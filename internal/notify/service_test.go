@@ -413,6 +413,67 @@ func TestPersistedBaseRunNotificationDoesNotReplayAfterInputSupport(t *testing.T
 	}
 }
 
+func TestPersistedOrdinaryReceiptsSurviveFeedbackSupport(t *testing.T) {
+	for _, purpose := range []string{"", "review"} {
+		for _, input := range []bool{false, true} {
+			t.Run(purpose+"/"+map[bool]string{false: "prepared", true: "input"}[input], func(t *testing.T) {
+				ctx := context.Background()
+				durable, err := store.Open(ctx, filepath.Join(t.TempDir(), "state"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer durable.Close()
+				run, _, err := durable.Create(ctx, store.Run{Purpose: purpose, Repository: "github.com/owner/repo", RepositoryID: 99, PullID: 701, Number: 1, ActorID: 43, ActorLogin: "reviewer", WorkKey: "ordinary-receipt", State: store.Queued, Configuration: json.RawMessage(`{}`)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if won, err := durable.Claim(ctx, run.ID); err != nil || !won {
+					t.Fatal("claim", err)
+				}
+				legacy := fingerprint(string(store.Prepared), "payload")
+				request := clarification.Request{ID: "input-first", ThreadID: "thread", TurnID: "turn", WireID: `"wire"`, ItemID: "item", Participant: "primary", Transport: "dynamic", Questions: []clarification.Question{{ID: "scope", Header: "Scope", Question: "owned private question"}}}
+				if input {
+					if err := durable.RecordProgress(ctx, run.ID, "thread", "turn", "model", "model", "reviewing", nil); err != nil {
+						t.Fatal(err)
+					}
+					if err := durable.OpenInput(ctx, run.ID, request); err != nil {
+						t.Fatal(err)
+					}
+					legacy = fingerprint(string(store.Reviewing), "", "input-first")
+				} else if err := durable.Prepare(ctx, run.ID, "payload", json.RawMessage(`{}`), "thread", "turn"); err != nil {
+					t.Fatal(err)
+				}
+				pending, err := durable.ObserveNotifications(ctx, []store.Notification{{Source: "run:" + run.ID, Repository: run.Repository, ActorID: run.ActorID, PullID: run.PullID, Number: run.Number, Fingerprint: legacy, Body: "previously delivered ordinary notification", Pending: true}})
+				if err != nil || len(pending) != 1 {
+					t.Fatal("seed previous receipt", err)
+				}
+				if taken, err := durable.TakeNotifications(ctx, pending); err != nil || len(taken) != 1 {
+					t.Fatal("acknowledge previous receipt", err)
+				}
+				var messages []Message
+				service := Service{Store: durable, Terminal: func(_ context.Context, m Message) error { messages = append(messages, m); return nil }}
+				doc := document(t, "desktop=false\n")
+				if err := service.Pump(ctx, doc, true); err != nil || len(messages) != 0 {
+					t.Fatal("unchanged ordinary receipt replayed after feedback support", err, len(messages))
+				}
+				if input {
+					request.ID = "input-second"
+					if err := durable.OpenInput(ctx, run.ID, request); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := durable.Fail(ctx, run.ID, store.Failed, "owned transition"); err != nil {
+					t.Fatal(err)
+				}
+				for range 2 {
+					if err := service.Pump(ctx, doc, true); err != nil || len(messages) != 1 {
+						t.Fatal("genuine ordinary transition was suppressed or replayed", err, len(messages))
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestClarificationNotificationsTrackPendingIdentityWithoutPrivateText(t *testing.T) {
 	ctx := context.Background()
 	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "state"))

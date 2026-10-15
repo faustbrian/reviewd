@@ -139,7 +139,10 @@ func AcquireModifier(ctx context.Context, directory string, key ModifierKey) (_ 
 	if err != nil || !modifier.matches(run) || (!run.OwnerClosed && recovered.State != "feedback_pending") {
 		return nil, ErrModifierBusy
 	}
-	modifier.Prior = &ModifierPrior{Profile: record.Profile, Run: run}
+	// Older schema-1 pointers may contain an ancestor alias. OpenExisting
+	// validated the exact private profile; compare its admitted identity without
+	// rewriting the durable pointer or manufacturing another execution owner.
+	modifier.Prior = &ModifierPrior{Profile: profile.Directory(), Run: run}
 	return modifier, nil
 }
 

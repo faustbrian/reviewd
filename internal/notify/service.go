@@ -172,9 +172,11 @@ func (s *Service) Pump(ctx context.Context, document *config.Document, force boo
 				body = "Feedback handling needs attention; inspect work, shutdown and any delivered effects with reviewd show " + run.ID + "."
 			}
 		}
-		identity := fingerprint(run.Purpose, string(run.State), run.PayloadID)
+		// Purpose is immutable for this durable run ID. Preserve the historical
+		// receipt identity so adding feedback presentation cannot replay reviews.
+		identity := fingerprint(string(run.State), run.PayloadID)
 		if inputs := inputFingerprint(run); inputs != "" {
-			identity = fingerprint(run.Purpose, string(run.State), run.PayloadID, inputs)
+			identity = fingerprint(string(run.State), run.PayloadID, inputs)
 		}
 		add(store.Notification{Source: "run:" + run.ID, Repository: run.Repository, ActorID: run.ActorID,
 			PullID: run.PullID, Number: run.Number, Fingerprint: identity, Body: body}, body != "", run.CreatedAt)

@@ -16,9 +16,17 @@ func (s *CapturedSkill) FeedbackCommandRoot(ownerRoot string) (string, error) {
 	if s == nil || !s.feedbackCommands || s.root == "" || s.Identity.Digest != digest(s.Documents) {
 		return "", errors.New("only an intact feedback workflow capture may grant instruction reads")
 	}
+	ownerInfo, err := os.Lstat(ownerRoot)
+	if err != nil || !ownerInfo.IsDir() {
+		return "", errors.New("feedback instruction owner must be a directory, not a symlink")
+	}
 	owner, err := filepath.EvalSymlinks(ownerRoot)
 	if err != nil {
 		return "", err
+	}
+	canonicalInfo, err := os.Lstat(owner)
+	if err != nil || !os.SameFile(ownerInfo, canonicalInfo) {
+		return "", errors.New("feedback instruction owner identity changed during admission")
 	}
 	root, err := filepath.EvalSymlinks(s.root)
 	if err != nil {

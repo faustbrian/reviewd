@@ -71,6 +71,25 @@ func captureSkill(name, path, parent, qaPath string, packageLimit int, byteLimit
 		return nil, errors.New("reviewer.skill_path must point to the selected SKILL.md")
 	}
 	installed := filepath.Dir(path)
+	var parentInfo os.FileInfo
+	if parent == "" {
+		parent = os.TempDir()
+	} else if qaPath != "" {
+		parentInfo, err = os.Lstat(parent)
+		if err != nil || !parentInfo.IsDir() {
+			return nil, errors.New("frozen skill storage requires a directory parent, not a symlink")
+		}
+	}
+	parent, err = filepath.EvalSymlinks(parent)
+	if err != nil {
+		return nil, errors.New("could not resolve private frozen skill storage parent")
+	}
+	if parentInfo != nil {
+		canonicalInfo, statErr := os.Lstat(parent)
+		if statErr != nil || !os.SameFile(parentInfo, canonicalInfo) {
+			return nil, errors.New("frozen skill storage parent identity changed during admission")
+		}
+	}
 	root, err := os.MkdirTemp(parent, "reviewd-skill-")
 	if err != nil {
 		return nil, errors.New("could not create private frozen skill storage")

@@ -160,3 +160,110 @@ func TestRetainedFeedbackWorkspaceCannotBeDeletedByOrdinaryClose(t *testing.T) {
 		t.Fatal("retained owner root was deleted", err)
 	}
 }
+
+func TestStateProfileAncestorAliasResumesTheSamePrivateWorkspace(t *testing.T) {
+	ctx := context.Background()
+	parent, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	physical := filepath.Join(parent, "physical")
+	alias := filepath.Join(parent, "alias")
+	if err := os.Mkdir(physical, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(physical, alias); err != nil {
+		t.Fatal(err)
+	}
+	profile := filepath.Join(physical, "profile")
+	s, err := Open(ctx, filepath.Join(alias, "profile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	owner, err := s.BeginPrivateOwner(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	canonicalOwner, err := filepath.EvalSymlinks(owner.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Continue through real retention/reopen even if admission retained an alias.
+	if s.Directory() != profile || owner.Root != canonicalOwner {
+		t.Error("profile admission retained ancestor aliases in private ownership")
+	}
+	run, created, err := s.Create(ctx, Run{Purpose: "feedback", OwnerID: owner.ID, Repository: "github.com/owner/repo", RepositoryID: 99, PullID: 700, Number: 17, ActorID: 43, ActorLogin: "author", WorkKey: "alias-resume", State: Queued, Configuration: json.RawMessage(`{}`)})
+	if err != nil || !created {
+		t.Fatal("create", err)
+	}
+	if won, err := s.ClaimFeedback(ctx, run.ID); err != nil || !won {
+		t.Fatal("claim", err)
+	}
+	if err := owner.KeepFeedbackWorkspace(ctx, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	child, err := os.MkdirTemp(owner.Root, "reviewd-feedback-workspace-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := filepath.Join(child, "pending.txt")
+	if err := os.WriteFile(pending, []byte("unpublished fix"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome := json.RawMessage(`{"effects":[{"kind":"reply","state":"verified","id":719}]}`)
+	if err := s.FinishFeedback(ctx, run.ID, Partial, outcome, "remaining review request"); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.SuspendFeedback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, spelling := range []string{profile, filepath.Join(alias, "profile")} {
+		reopened, err := OpenExisting(ctx, spelling)
+		if err != nil {
+			t.Fatal(err)
+		}
+		observed, err := reopened.Get(ctx, run.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resumed, err := reopened.ResumeFeedbackOwner(ctx, observed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resumed.ID != owner.ID || resumed.Root != canonicalOwner || reopened.Directory() != profile {
+			t.Error("reopening changed private owner identity or retained a path alias")
+		}
+		after, err := os.Stat(filepath.Join(resumed.Root, filepath.Base(child)))
+		if err != nil || !os.SameFile(before, after) {
+			t.Fatal("workspace was replaced", err)
+		}
+		data, err := os.ReadFile(filepath.Join(resumed.Root, filepath.Base(child), "pending.txt"))
+		if err != nil || string(data) != "unpublished fix" || string(observed.Outcome) != string(outcome) || observed.OwnerClosed {
+			t.Fatal("resume lost pending work or recorded effects", err)
+		}
+		if err := resumed.SuspendFeedback(); err != nil {
+			t.Fatal(err)
+		}
+		reopened.Close()
+	}
+	// A final profile link is not an ancestor alias and must never gain admission.
+	finalLink := filepath.Join(physical, "linked-profile")
+	if err := os.Symlink(profile, finalLink); err != nil {
+		t.Fatal(err)
+	}
+	for _, open := range []func(context.Context, string) (*Store, error){Open, OpenExisting} {
+		if linked, err := open(ctx, finalLink); err == nil {
+			linked.Close()
+			t.Fatal("final profile symlink was accepted")
+		}
+	}
+}
