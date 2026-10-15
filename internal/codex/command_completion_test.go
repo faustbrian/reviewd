@@ -364,8 +364,9 @@ func TestLinuxDecodedOutputExpansionReleasesCompletedOwnership(t *testing.T) {
 		}
 		sent <- json.NewEncoder(peer).Encode(Message{ID: request.ID, Result: raw})
 	}()
-	operation, cancel := context.WithTimeout(owner.Context(ctx), 5*time.Second)
-	defer cancel()
+	// Run's existing command budget bounds this protocol assertion. A separate
+	// short deadline would benchmark multi-MiB decoding under race instrumentation.
+	operation := owner.Context(ctx)
 	result, err := host.Run(operation, []string{"owned-inert-command"}, time.Minute)
 	if err != nil {
 		t.Fatalf("valid decoded terminal output became uncertain: %v", err)
