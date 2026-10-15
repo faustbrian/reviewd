@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -183,18 +184,51 @@ func resourcesStopped(ctx context.Context, processes map[string]int) (bool, erro
 
 func (s *Store) removePrivateRoot(ctx context.Context, id, root, observedProcesses string, info os.FileInfo) error {
 	current, err := privateDirectory(root, false)
+	if errors.Is(err, os.ErrNotExist) {
+		return s.reconcileRemovedPrivateRoot(ctx, id, root)
+	}
 	if err != nil || !os.SameFile(info, current) {
 		return errors.New("private resource root changed; storage retained")
 	}
 	// This barrier both records proven child shutdown before file deletion and
 	// rejects any late launch. The exact process snapshot prevents a concurrent
 	// new registration from being mistaken for the already inspected groups.
-	result, err := s.db.ExecContext(ctx, `UPDATE private_owners SET closing=1,processes='{}' WHERE id=? AND processes=?`, id, observedProcesses)
-	if err = changed(result, err, "private execution changed before cleanup; storage retained"); err != nil {
+	result, err := s.db.ExecContext(ctx, `UPDATE private_owners SET closing=1,processes='{}' WHERE id=? AND (processes=? OR closing=1)`, id, observedProcesses)
+	if err != nil {
 		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		// A contender may finish after our identity read but before this CAS.
+		// Reconcile only completed deletion, never a changed live snapshot.
+		return s.reconcileRemovedPrivateRoot(ctx, id, root)
 	}
 	if err := os.RemoveAll(root); err != nil {
 		return errors.New("cannot remove owned private storage; run reviewd recover")
+	}
+	return s.finishPrivateOwner(ctx, id)
+}
+
+// Missing files alone do not prove shutdown. Another cleaner must have either
+// persisted its shutdown barrier or acknowledged it by removing the owner row.
+// This path never deletes storage, including a replacement at the same path.
+func (s *Store) reconcileRemovedPrivateRoot(ctx context.Context, id, root string) error {
+	if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+		return errors.New("private resource root changed; storage retained")
+	}
+	var closing bool
+	err := s.db.QueryRowContext(ctx, "SELECT closing FROM private_owners WHERE id=?", id).Scan(&closing)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !closing {
+		return errors.New("private execution changed before cleanup; storage retained")
 	}
 	return s.finishPrivateOwner(ctx, id)
 }
