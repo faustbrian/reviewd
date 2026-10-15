@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/faustbrian/reviewd/internal/containerapi"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -55,6 +56,8 @@ var definitions = map[string]definition{
 	"feedback.reasoning_effort":     {"high", globalScope | projectScope | cliScope},
 	"feedback.skill":                {"handle-pr-feedback", globalScope | projectScope | cliScope},
 	"feedback.skill_path":           {"", globalScope | projectScope | cliScope},
+	"feedback.container_endpoint":   {"", globalScope | projectScope},
+	"feedback.container_image":      {"", globalScope | projectScope},
 	"limits.feedback_timeout":       {"60m", globalScope | projectScope | cliScope},
 	"limits.max_concurrent_reviews": {int64(2), globalScope | cliScope},
 	"limits.review_timeout":         {"30m", globalScope | projectScope | cliScope},
@@ -208,13 +211,16 @@ func (s *Snapshot) UnmarshalJSON(data []byte) error {
 	_, hasAuthors := wire.Values["reviewer.exclude_authors"]
 	hasFeedback, feedbackCount := false, 0
 	for key := range definitions {
-		if feedbackSetting(key) {
+		if feedbackSetting(key) && !containerSetting(key) {
 			feedbackCount++
 			if _, present := wire.Values[key]; present {
 				hasFeedback = true
 			}
 		}
 	}
+	_, hasContainerEndpoint := wire.Values["feedback.container_endpoint"]
+	_, hasContainerImage := wire.Values["feedback.container_image"]
+	hasContainer := hasContainerEndpoint || hasContainerImage
 	expected := len(definitions)
 	if !hasAuthors {
 		expected--
@@ -222,7 +228,10 @@ func (s *Snapshot) UnmarshalJSON(data []byte) error {
 	if !hasFeedback {
 		expected -= feedbackCount
 	}
-	if wire.SchemaVersion != 1 || len(wire.Values) != expected || len(wire.Provenance) != expected || (hasFeedback && !hasAuthors) {
+	if !hasContainer {
+		expected -= 2
+	}
+	if wire.SchemaVersion != 1 || len(wire.Values) != expected || len(wire.Provenance) != expected || (hasFeedback && !hasAuthors) || (hasContainer && !hasFeedback) {
 		return errors.New("configuration snapshot has an unsupported or incomplete schema")
 	}
 	identity, err := Repository("github.com", wire.Repository)
@@ -258,7 +267,8 @@ func (s *Snapshot) UnmarshalJSON(data []byte) error {
 	validationValues := cloneValues(values)
 	for key, definition := range definitions {
 		if _, present := validationValues[key]; !present {
-			if key != "reviewer.exclude_authors" && (!feedbackSetting(key) || hasFeedback) {
+			legacyContainer := containerSetting(key) && !hasContainer
+			if !legacyContainer && key != "reviewer.exclude_authors" && (!feedbackSetting(key) || hasFeedback) {
 				return errors.New("configuration snapshot is missing a required setting")
 			}
 			validationValues[key] = copyValue(definition.value)
@@ -602,6 +612,17 @@ func validate(values map[string]any) error {
 	if !oneOf(values["feedback.action"].(string), "ignore", "notify", "ask", "auto") {
 		return errors.New("feedback.action must be ignore, notify, ask or auto")
 	}
+	if endpoint := values["feedback.container_endpoint"].(string); endpoint != "" {
+		// Construction validates the Unix selector without opening a socket.
+		client, err := containerapi.New(endpoint)
+		if err != nil {
+			return errors.New("feedback.container_endpoint must be an absolute local unix:/// socket URL")
+		}
+		_ = client.Close()
+	}
+	if image := values["feedback.container_image"].(string); image != "" && !containerImagePattern.MatchString(image) {
+		return errors.New("feedback.container_image must be a locally cached immutable sha256 image ID, not a tag")
+	}
 	for _, key := range []string{"actions.new_pull_request", "actions.review_requested", "actions.head_updated", "actions.review_submitted", "actions.review_comment_added"} {
 		if !oneOf(values[key].(string), "ignore", "notify", "ask", "auto") {
 			return fmt.Errorf("%s must be ignore, notify, ask or auto", key)
@@ -673,6 +694,12 @@ func oneOf(value string, options ...string) bool {
 	}
 	return false
 }
+
+func containerSetting(key string) bool {
+	return key == "feedback.container_endpoint" || key == "feedback.container_image"
+}
+
+var containerImagePattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
 // Manager swaps only fully parsed/validated operator configuration. Existing
 // snapshots contain independent values and are not rewritten by reload.

@@ -225,6 +225,23 @@ repository `.reviewd` or command-line override. Agent model/effort, installed
 `feedback.skill` (default `handle-pr-feedback`), `feedback.skill_path`, and
 `limits.feedback_timeout` (default `60m`) are independent of the private reviewer.
 
+macOS repository commands require a running local Docker Engine, the installed
+paired helper, and a locally cached Linux toolchain image with Git and the
+project's offline dependencies. The native CLI and model sessions stay native;
+repository commands run in Linux, so they cannot certify macOS-only checks.
+Only operator global or exact-project settings may select
+`feedback.container_endpoint` (an absolute local `unix:///` socket URL) and
+`feedback.container_image` (the full immutable `sha256:` image ID, not a tag).
+Neither setting enables monitoring or fixing, and neither is accepted from
+`.reviewd` or CLI overrides. Missing prerequisites hold modifying checkout;
+there is no native fallback, image pull, daemon startup or global Git change.
+Linux keeps its native command backend.
+
+`doctor` reports the optional macOS feedback dependency separately from ordinary
+review readiness. Its warning is not proof that a container, Git or project
+checks ran. The complete modifying executor remains disconnected as described
+below, even when these settings are supplied.
+
 **Explicit manual permission:** `reviewd feedback <item-id>` previews the PR
 head, base, human-feedback inventory, selected feedback model/effort and full
 fix/commit/push/GitHub scope without recording a decision. Repeat the displayed

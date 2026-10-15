@@ -59,6 +59,7 @@ type Gap struct {
 }
 type Snapshot struct {
 	TargetBaseSHA, MergeBaseSHA, HeadSHA string
+	HeadTreeSHA                          string
 	CommitCount                          int
 	Sources                              map[string]map[string]string
 	Manifests                            map[string][]Entry
@@ -224,6 +225,14 @@ func Acquire(ctx context.Context, options Options, boundary Boundary) (snapshot 
 		return nil, errors.New("complete commit comparison count was unavailable")
 	}
 	objects := map[string]Entry{}
+	headTree, err := r.run(ctx, nil, 1024, "rev-parse", "--verify", boundary.HeadSHA+"^{tree}")
+	if err != nil {
+		return nil, err
+	}
+	snapshot.HeadTreeSHA = strings.TrimSpace(string(headTree))
+	if !objectID.MatchString(snapshot.HeadTreeSHA) || len(snapshot.HeadTreeSHA) != len(boundary.HeadSHA) {
+		return nil, errors.New("immutable head tree identity is unavailable")
+	}
 	for revision, sha := range map[string]string{"base": snapshot.MergeBaseSHA, "head": boundary.HeadSHA, "target": boundary.TargetBaseSHA} {
 		tree, treeErr := r.run(ctx, nil, maxManifest, "ls-tree", "-rlz", "--full-tree", sha)
 		if treeErr != nil {

@@ -80,8 +80,8 @@ An unacknowledged command cannot currently be reconciled merely by observing or
 stopping the old server group. Do not delete its private scope or treat another
 recovery pass as proof of completion. Automatic reclamation of that ambiguous
 command scope is not implemented. The modifying feedback workflow is still
-disconnected. The internal container command provider described below is not yet
-wired to checkout or feedback automation. These Linux changes do not certify
+disconnected. The internal container command provider described below is wired
+to initial macOS checkout, but not feedback automation. These Linux changes do not certify
 macOS feedback-command shutdown or change the read-only reviewer's capabilities
 and context lifetime.
 
@@ -151,10 +151,25 @@ an unknown result into success. Reopening the profile preserves uncertainty
 without command replay. Automatic reclamation of an unresolved completion slot
 is not implemented.
 
-This is an internal command provider, not connected feedback automation. Initial
-checkout, operator configuration, the installed feedback skill and its complete
-verification/delivery boundaries are not yet wired to it. The modifying workflow
-remains unavailable; ordinary read-only review does not gain these capabilities.
+Initial macOS checkout now selects this provider using frozen operator-only
+endpoint/image settings and the paired installed helper. Git trusts only the
+exact private `/workspace` mount in the command environment, accommodating guest
+ownership translation without global settings or a wildcard. Later command
+phases can reopen the same backend with read-only grants only after known prior
+shutdown; uncertainty prevents replacement.
+
+Checkout must preserve the exact branch, head and complete index tree. After
+command-host shutdown, the application verifies every worktree blob byte, mode,
+symlink target and exact pathname against the immutable full manifest, including
+binary and unchanged source omitted from text review. Collapsed case/Unicode
+names, transformed checkout bytes, unsupported paths/submodules, and trees over
+1 GiB are rejected rather than silently certified. Complete-object export has
+its separate existing 1-GiB bound. Native Linux checkout retains its backend and
+the same fidelity checks.
+
+This remains an internal checkout/provider boundary, not connected feedback
+automation. The installed feedback skill and its complete verification/delivery
+workflow remain unavailable; ordinary read-only review gains no command grants.
 
 ## Classification
 

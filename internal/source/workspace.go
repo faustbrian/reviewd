@@ -58,6 +58,9 @@ func (s *Snapshot) PrepareFeedbackWorkspace(ctx context.Context, parent, branch 
 	if !feedbackBranch(branch) || !objectID.MatchString(s.HeadSHA) || s.root == "" {
 		return nil, errors.New("feedback workspace requires an exact immutable head and existing branch")
 	}
+	if _, _, err := s.feedbackManifest(); err != nil {
+		return nil, err
+	}
 	objects, err := os.OpenRoot(filepath.Join(s.root, "objects"))
 	if err != nil {
 		return nil, errors.New("immutable Git objects are unavailable")

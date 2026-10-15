@@ -221,10 +221,13 @@ func (c *Client) create(ctx context.Context, resource Resource, spec CommandSpec
 	if err != nil || after != identity {
 		return "", errors.Join(ErrUncertain, err)
 	}
+	// Sharing can report a different guest owner even though the caller owns
+	// this private host checkout. Trust only that exact application-bound mount,
+	// in this command environment; never change global policy or trust wildcards.
 	request := map[string]any{
 		"Image": spec.Image, "User": user, "Cmd": append([]string{commandcapture.GuestHelper, "--protocol=1", "--nonce=" + resource.ResourceID, "--"}, spec.Argv...), "Entrypoint": []string{}, "WorkingDir": "/workspace", "Tty": false,
 		"Labels": map[string]string{"io.reviewd.owner": resource.OwnerID, "io.reviewd.resource": resource.ResourceID},
-		"Env":    []string{"PATH=" + search, commandcapture.KeyEnvironment + "=" + hex.EncodeToString(spec.Key), "HOME=/tmp", "TMPDIR=/tmp", "GOCACHE=/tmp/go-build", "GOMODCACHE=/tmp/go-modules", "GOTMPDIR=/tmp", "GOPATH=/tmp/go", "GOWORK=off", "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0"},
+		"Env":    []string{"PATH=" + search, commandcapture.KeyEnvironment + "=" + hex.EncodeToString(spec.Key), "HOME=/tmp", "TMPDIR=/tmp", "GOCACHE=/tmp/go-build", "GOMODCACHE=/tmp/go-modules", "GOTMPDIR=/tmp", "GOPATH=/tmp/go", "GOWORK=off", "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=safe.directory", "GIT_CONFIG_VALUE_0=/workspace"},
 		"HostConfig": map[string]any{
 			"NetworkMode": "none", "ReadonlyRootfs": true, "Privileged": false, "AutoRemove": false,
 			"CapDrop": []string{"ALL"}, "SecurityOpt": []string{"no-new-privileges:true"}, "PidsLimit": 256,

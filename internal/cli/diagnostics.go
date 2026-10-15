@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -176,6 +177,18 @@ func (e *execution) diagnose(ctx context.Context, document *config.Document, pat
 		report.Diagnostics = append(report.Diagnostics, Diagnostic{Check: "repository scope", Status: "warning", Message: "No repositories are selected for monitoring.", Correction: "Set github.repositories to an explicit allowlist before starting watch."})
 	}
 	report.Diagnostics = append(report.Diagnostics, deps.Codex(ctx, scopes)...)
+	if runtime.GOOS == "darwin" {
+		for _, scope := range scopes {
+			if !scope.FeedbackMonitoringConfigured() || len(scope.Strings("feedback.authors")) == 0 || scope.FeedbackAction("review_submitted") == "ignore" {
+				continue
+			}
+			correction := "Use a supported local runtime, the paired package helper and a cached Linux image with Git, project tools and offline dependencies. Linux checks do not establish native macOS-only checks."
+			if scope.String("feedback.container_endpoint") == "" || scope.String("feedback.container_image") == "" {
+				correction = "Set feedback.container_endpoint and feedback.container_image in operator global or exact-project configuration. " + correction
+			}
+			report.Diagnostics = append(report.Diagnostics, Diagnostic{Check: "feedback command backend", Scope: policy(scope).Scope, Status: "warning", Message: "Modifying feedback execution is not connected in this build; its optional container dependency does not disable ordinary reviews. Container execution was not probed by doctor.", Correction: correction})
+		}
+	}
 	report.Ready = true
 	for _, item := range report.Diagnostics {
 		if item.Status == "error" {

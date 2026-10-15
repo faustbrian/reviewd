@@ -150,7 +150,7 @@ func TestFeedbackWorkspaceRejectsInvalidOrExternalObjectStorage(t *testing.T) {
 			if err := os.MkdirAll(filepath.Join(bare, "objects", "info"), 0700); err != nil {
 				t.Fatal(err)
 			}
-			snapshot := &Snapshot{root: bare, HeadSHA: strings.Repeat("a", 40)}
+			snapshot := &Snapshot{root: bare, HeadSHA: strings.Repeat("a", 40), Manifests: map[string][]Entry{"head": {}}}
 			branch := "feature/existing-pr"
 			switch kind {
 			case "bad branch":
