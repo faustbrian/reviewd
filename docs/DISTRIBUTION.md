@@ -37,8 +37,12 @@ permanent release channel. No tag, GitHub release, service, or automatic updater
 is created by this workflow.
 
 Each artifact contains a `.tar.gz`, `manifest.json`, and `SHA256SUMS`. The archive
-contains the executable, its `BUILD.json`, the selected revision's README, and
-Go/dependency license notices. The manifest binds checksums to the full source
+contains the native `reviewd` executable, its static Linux
+`reviewd-command-host` companion, `BUILD.json`, the selected revision's README,
+and Go/dependency license notices. The helper matches the supported Linux guest
+architecture even when the CLI is a native macOS binary. `BUILD.json` and the
+artifact manifest bind the companion's target, capture protocol and checksum to
+the same immutable build as the native CLI. The manifest binds checksums to the full source
 commit, Git tree, target, binary version, exact Go toolchain and module sums.
 It is unsigned metadata: checksums detect corruption, not a compromised build
 account or an independent publisher identity.
@@ -52,18 +56,34 @@ shasum -a 256 -c SHA256SUMS
 sha256sum -c SHA256SUMS
 
 tar -xzf reviewd_dev-*_darwin_arm64.tar.gz
-mkdir -p "$HOME/.local/bin"
-install -m 755 reviewd "$HOME/.local/bin/reviewd"
-"$HOME/.local/bin/reviewd" --version
+mkdir -p "$HOME/.local/opt/reviewd"
+install -m 755 reviewd reviewd-command-host "$HOME/.local/opt/reviewd/"
+install -m 644 BUILD.json "$HOME/.local/opt/reviewd/BUILD.json"
+"$HOME/.local/opt/reviewd/reviewd" --version
 ```
 
 Use the archive matching your platform in the extraction command. Add
-`$HOME/.local/bin` to your shell's `PATH` if it is not already present.
+`$HOME/.local/opt/reviewd` to your shell's `PATH` if it is not already present.
+Keep all three installed files together; a symlink to the native CLI may point
+into that directory. The internal provider verifies both executable checksums
+against the paired metadata, checks the helper's static Linux architecture and
+application identity, then freezes its bytes inside the private owner. It never
+selects a repository/PATH helper or builds/downloads one during execution. A
+missing or mismatched companion holds container commands, not normal reviews.
+The helper is not a macOS host executable and should not be invoked directly.
+Full modifying feedback remains disconnected; installing the companion does not
+enable automation.
 Installation is an explicit operator action; reviewd never installs a service.
 macOS download policy may require the operator to allow an unsigned binary;
 these artifacts are not notarized. Linux builds target the Go toolchain's
 documented amd64/arm64 baseline; native CI uses Ubuntu 24.04, not every Linux
 distribution or kernel. See [Go's platform requirements](https://go.dev/wiki/MinimumRequirements).
+
+Container-backed command execution additionally requires a local Linux container
+runtime whose kernel enables Landlock ABI 3 or newer and permits its system calls.
+The packaged helper checks enforcement before executing repository commands; an
+unsupported runtime does not fall back to host execution. This provider is not yet
+connected to the complete feedback workflow described in [recovery](RECOVERY.md).
 
 Native Linux command isolation additionally requires Bubblewrap and a host
 policy that permits its sandbox namespaces. On Ubuntu 24.04, install the
@@ -106,6 +126,11 @@ python3 scripts/package.py --target darwin/arm64 --output native-dist --smoke
 # Rebuild a particular commit and its recorded binary label:
 python3 scripts/package.py --revision <full-commit> --version <recorded-version> --output rebuilt-dist
 ```
+
+Ordinary `go build ./cmd/reviewd` and `go run ./cmd/reviewd` development still
+work without a helper for the normal CLI/read-only reviewer. Use the packaging
+command for the paired installed layout; provider fixtures build their Linux
+helper into task-owned disposable storage. No runtime compiler is required.
 
 Output directories must not already exist; existing artifacts are not replaced.
 The default binary label is `dev-<12-character-commit>`. An explicit `--version`

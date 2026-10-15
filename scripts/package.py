@@ -76,7 +76,11 @@ def modules_and_notices(source, env, targets):
     for target in targets:
         current = env.copy()
         current.update(GOOS=target.split("/")[0], GOARCH=target.split("/")[1])
-        raw = run(["go", "list", "-deps", "-json", "-mod=readonly", "./cmd/reviewd"], source, current)
+        raw = run(["go", "list", "-deps", "-json", "-mod=readonly", "./cmd/reviewd", "./cmd/reviewd-command-host"], source, current)
+        guest = current.copy()
+        guest["GOOS"] = "linux"
+        raw += "\n" + run(["go", "list", "-deps", "-json", "-mod=readonly",
+                            "./cmd/reviewd-command-host"], source, guest)
         for package in json_values(raw):
             module = package.get("Module", {})
             if module and not module.get("Main"):
@@ -172,16 +176,27 @@ def package(args):
                     if not run([str(binary), "completion", shell], source, env).strip():
                         raise RuntimeError("Packaged binary produced empty shell completion")
             data = binary.read_bytes()
+            helper_env = build_env.copy()
+            helper_env["GOOS"] = "linux"
+            helper_binary = temporary / "reviewd-command-host"
+            run(["go", "build", *flags, "-o", str(helper_binary), "./cmd/reviewd-command-host"], source, helper_env)
+            helper = helper_binary.read_bytes()
+            helper_metadata = {"file": "reviewd-command-host", "target": "linux/" + target.split("/")[1],
+                               "protocol": 1, "sha256": hashlib.sha256(helper).hexdigest()}
+            if args.smoke and host == "linux":
+                actual = run([str(helper_binary), "--version"], source, env).strip()
+                if actual != "reviewd command host version " + version:
+                    raise RuntimeError("Packaged container helper reports an unexpected version")
             build = {key: value for key, value in metadata.items() if key != "artifacts"}
             build.update(target=target, build_flags=flags,
-                         binary_sha256=hashlib.sha256(data).hexdigest())
+                         binary_sha256=hashlib.sha256(data).hexdigest(), container_helper=helper_metadata)
             name = "reviewd_" + version + "_" + target.replace("/", "_") + ".tar.gz"
-            archive_files(staged / name, [("reviewd", data, 0o755), ("BUILD.json", encode(build), 0o644),
+            archive_files(staged / name, [("reviewd", data, 0o755), ("reviewd-command-host", helper, 0o755), ("BUILD.json", encode(build), 0o644),
                                           ("README.md", (source / "README.md").read_bytes(), 0o644),
                                           ("THIRD_PARTY_NOTICES.txt", notices, 0o644)])
             metadata["artifacts"].append({"target": target, "file": name,
                 "sha256": hashlib.sha256((staged / name).read_bytes()).hexdigest(),
-                "binary_sha256": build["binary_sha256"]})
+                "binary_sha256": build["binary_sha256"], "container_helper": helper_metadata})
         if any((source / name).read_bytes() != value for name, value in before.items()):
             raise RuntimeError("Build changed immutable module metadata; fix dependencies before distribution")
         (staged / "manifest.json").write_bytes(encode(metadata))

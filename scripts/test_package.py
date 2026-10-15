@@ -58,13 +58,14 @@ elif args[:3] == ["list", "-m", "-json"]:
         "Sum": "h1:owned-fixture", "Dir": os.environ["FIXTURE_DEPENDENCY"]}))
     print(json.dumps({"Path": "example.invalid/unused", "Version": "v1.0.0"}))
 elif args and args[0] == "build":
-    if os.environ.get("FIXTURE_BUILD_FAIL") == "1":
+    if os.environ.get("FIXTURE_BUILD_FAIL") == "1" or (os.environ.get("FIXTURE_HELPER_FAIL") == "1" and args[-1] == "./cmd/reviewd-command-host"):
         print("owned compiler failure", file=sys.stderr)
         sys.exit(1)
     output = pathlib.Path(args[args.index("-o") + 1])
     data = pathlib.Path("value.txt").read_bytes()
+    suffix = b":helper" if args[-1] == "./cmd/reviewd-command-host" else b""
     output.write_bytes(b"owned-binary:" + data + b":" + os.environ["GOOS"].encode()
-        + b":" + os.environ["GOARCH"].encode())
+        + b":" + os.environ["GOARCH"].encode() + suffix)
     output.chmod(0o755)
 else:
     raise SystemExit("unexpected fake Go command")
@@ -115,6 +116,12 @@ else:
             self.assertEqual(bundle.extractfile("reviewd").read(),
                              b"owned-binary:committed payload:linux:amd64")
             self.assertEqual(bundle.getmember("reviewd").mode, 0o755)
+            helper = bundle.extractfile("reviewd-command-host").read()
+            self.assertEqual(helper,b"owned-binary:committed payload:linux:amd64:helper")
+            self.assertEqual(bundle.getmember("reviewd-command-host").mode,0o755)
+            helper_metadata=json.loads(bundle.extractfile("BUILD.json").read())["container_helper"]
+            self.assertEqual(helper_metadata,{"file":"reviewd-command-host","target":"linux/amd64","protocol":1,"sha256":hashlib.sha256(helper).hexdigest()})
+            self.assertEqual(artifact["container_helper"],helper_metadata)
             self.assertTrue(all(m.uid == 0 and m.gid == 0 and m.mtime == 0 for m in bundle.getmembers()))
             licenses = bundle.extractfile("THIRD_PARTY_NOTICES.txt").read().decode()
             self.assertIn("Owned dependency license text.", licenses)
@@ -127,6 +134,29 @@ else:
                 self.assertTrue(record[key])
                 self.assertFalse(Path(record[key]).exists(), record[key])
         self.assertEqual((self.repo / "value.txt").read_text(), "dirty payload")
+
+    def test_darwin_packages_pair_native_cli_with_linux_guest_helper(self):
+        output=self.root/"darwin-pair"
+        result=self.package(output,"--target","darwin/arm64")
+        self.assertEqual(result.returncode,0,result.stderr)
+        metadata=json.loads((output/"manifest.json").read_text())
+        artifact=next(item for item in metadata["artifacts"] if item["target"]=="darwin/arm64")
+        with tarfile.open(output/artifact["file"]) as bundle:
+            self.assertEqual(bundle.extractfile("reviewd").read(),b"owned-binary:committed payload:darwin:arm64")
+            helper=bundle.extractfile("reviewd-command-host").read()
+            self.assertEqual(helper,b"owned-binary:committed payload:linux:arm64:helper")
+            self.assertEqual(artifact["container_helper"]["target"],"linux/arm64")
+            self.assertEqual(artifact["container_helper"]["sha256"],hashlib.sha256(helper).hexdigest())
+
+    def test_helper_build_failure_never_publishes_partial_package(self):
+        self.env["FIXTURE_HELPER_FAIL"]="1"
+        output=self.root/"helper-failure"
+        result=self.package(output)
+        self.assertNotEqual(result.returncode,0)
+        self.assertFalse(output.exists())
+        for record in map(json.loads,self.log.read_text().splitlines()):
+            for key in ("cache","modules","temp"):
+                self.assertFalse(Path(record[key]).exists())
 
     def test_identical_inputs_produce_identical_archives_and_do_not_overwrite(self):
         first, second = self.root / "first", self.root / "second"

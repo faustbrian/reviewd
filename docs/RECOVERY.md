@@ -80,9 +80,10 @@ An unacknowledged command cannot currently be reconciled merely by observing or
 stopping the old server group. Do not delete its private scope or treat another
 recovery pass as proof of completion. Automatic reclamation of that ambiguous
 command scope is not implemented. The modifying feedback workflow is still
-disconnected; the selected container-backed macOS command backend is not yet
-implemented. These Linux changes do not certify macOS feedback-command shutdown or
-change the read-only reviewer's capabilities and context lifetime.
+disconnected. The internal container command provider described below is not yet
+wired to checkout or feedback automation. These Linux changes do not certify
+macOS feedback-command shutdown or change the read-only reviewer's capabilities
+and context lifetime.
 
 ### Daemon-owned container resources
 
@@ -102,10 +103,58 @@ intent remain uncertain. A still-present container, even if exited, does not
 authorize deletion of private storage. Recovery does not start, stop, remove or
 replay a container operation.
 
-This is ownership/control-plane support, not a connected macOS executor. It
-does not create containers, select toolchain images, run checkout commands or
-establish container isolation. The modifying workflow remains unavailable until
-command execution and its required lifecycle/delivery boundaries are connected.
+The internal command provider can create one owned container per command. It
+requires a locally present immutable Linux image matching the daemon architecture;
+it never pulls an image, starts a runtime, or falls back to host execution. The
+operator-selected image supplies its installed toolchain search path, not the
+host environment. Ambiguous paths and writable workspace/scratch search paths
+are rejected during image preflight.
+
+Commands receive their private checkout bind mount, read-only or writable as
+requested, a read-only static Linux helper and private output scratch under the
+same owner. Root host identities are rejected before command creation; the guest
+retains the non-root owner's UID/GID instead of selecting an elevated user. Image root is read-only; temporary scratch is bounded. Network
+access, privilege escalation, additional capabilities and daemon log retention
+are disabled. The daemon socket is control-plane access for reviewd, never a
+command mount. These Linux commands cannot establish that a required macOS-only
+check passed. Tools and offline dependencies must already be available in the
+selected image or private checkout.
+
+The helper is the container's PID 1. It disables dumpability before launching
+repository code, excluding its per-command authentication key from the child's
+environment and inherited descriptors. The key remains a private owner input
+outside container mounts. The helper authenticates its own bounded stdout/stderr
+pipe observations and foreground exit, rather than trusting files the command
+can rewrite. A key-free trusted child applies Landlock write restrictions on a
+locked OS thread before replacing itself with repository code. Writes, creates,
+removals, truncation and cross-directory links are restricted to the checkout,
+bounded temporary scratch and normal device outputs, excluding capture storage.
+The checkout's read-only mount still controls read-only commands. The kernel and
+runtime must permit Landlock ABI 3 or newer; unsupported enforcement fails before
+repository execution, without a native fallback or additional-capability grant.
+Capture authentication remains independent of filesystem permissions; metadata
+permission tampering can deny completion, not forge it.
+
+No attachment stream is used as output authority. After a canonical terminal
+wait, the provider removes the exact owned container and proves its absence
+before reading capture files. Separate streams are limited to 1 MiB each; exact
+limits are accepted, overflow is incomplete. Readback rejects missing, malformed,
+truncated, oversized, symlinked or special-file output and requires authenticated
+request identity, byte counts, digests and the matching explicit exit code.
+Invalid UTF-8 is unsupported and incomplete, never silently normalized.
+
+Start acknowledgement, foreground exit, complete output and proven container
+removal remain different facts. An uncertain create, missing terminal result,
+unproven removal or failed capture retains the common private owner and blocks
+replacement modification. Cancellation attempts owned cleanup but cannot convert
+an unknown result into success. Reopening the profile preserves uncertainty
+without command replay. Automatic reclamation of an unresolved completion slot
+is not implemented.
+
+This is an internal command provider, not connected feedback automation. Initial
+checkout, operator configuration, the installed feedback skill and its complete
+verification/delivery boundaries are not yet wired to it. The modifying workflow
+remains unavailable; ordinary read-only review does not gain these capabilities.
 
 ## Classification
 
