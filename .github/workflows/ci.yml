@@ -22,6 +22,20 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Install native Linux sandbox prerequisites
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap apparmor-profiles apparmor-utils
+          if [[ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null || true)" == Y ]]; then
+            sudo install -m 0644 \
+              /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+              /etc/apparmor.d/bwrap-userns-restrict
+            sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+          fi
+          bwrap --version
       - name: Tests, race detection, vet and target builds
         run: python scripts/check.py --codex-capabilities --install-codex
 

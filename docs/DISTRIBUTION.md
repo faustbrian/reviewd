@@ -65,6 +65,18 @@ these artifacts are not notarized. Linux builds target the Go toolchain's
 documented amd64/arm64 baseline; native CI uses Ubuntu 24.04, not every Linux
 distribution or kernel. See [Go's platform requirements](https://go.dev/wiki/MinimumRequirements).
 
+Native Linux command isolation additionally requires Bubblewrap and a host
+policy that permits its sandbox namespaces. On Ubuntu 24.04, install the
+distribution's `bubblewrap`, `apparmor-profiles` and `apparmor-utils` packages;
+when AppArmor is enabled, load the distribution-provided
+`bwrap-userns-restrict` profile following the
+[Codex sandbox prerequisites](https://learn.chatgpt.com/docs/sandboxing#prerequisites).
+CI provisions that targeted profile on its disposable Ubuntu runners and still
+requires actual child execution, denied credential access, correct read/write
+boundaries and denied network access. It does not disable AppArmor or its
+host-wide user-namespace restriction. reviewd does not install packages or
+change a local machine's security policy.
+
 Print completion for your shell without modifying its configuration:
 
 ```sh

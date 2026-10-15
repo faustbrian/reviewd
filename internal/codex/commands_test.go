@@ -2,12 +2,16 @@ package codex
 
 import (
 	"context"
+	"fmt"
 	"github.com/faustbrian/reviewd/internal/lifetime"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -36,19 +40,41 @@ func TestCodexCapabilityBoundaryFeedbackCommands(t *testing.T) {
 	if err := os.WriteFile(original, []byte("original"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		fmt.Fprint(w, "owned-network-canary")
+	}))
+	defer server.Close()
+	// Prove that the fixture and actual curl executable work outside isolation;
+	// a missing binary or unreachable listener cannot pass the denial oracle.
+	curl := "/usr/bin/curl"
+	arguments := []string{"--disable", "--noproxy", "*", "--connect-timeout", "2", "--max-time", "3", "--fail", "--silent", "--show-error", server.URL}
+	control := exec.CommandContext(ctx, curl, arguments...)
+	if output, err := control.Output(); err != nil || string(output) != "owned-network-canary" || requests.Load() != 1 {
+		t.Fatalf("owned network fixture control failed: %v", err)
+	}
 	for _, writable := range []bool{false, true} {
 		host, err := StartCommandRuntime(ctx, CommandOptions{RuntimeOptions: RuntimeOptions{TempRoot: root}, Workspace: workspace, Writable: writable})
 		if err != nil {
 			t.Fatal(err)
 		}
 		result, err := host.Run(ctx, []string{"/bin/sh", "-c", `if cat "$1" 2>/dev/null; then echo CREDENTIAL_LEAK; else echo READ_DENIED; fi; if printf changed > source 2>/dev/null; then echo WRITE_ALLOWED; else echo WRITE_DENIED; fi; if git add source 2>/dev/null; then echo INDEX_ALLOWED; else echo INDEX_DENIED; fi; if test -n "$OPENAI_API_KEY$GH_TOKEN$CODEX_HOME$SSH_AUTH_SOCK"; then echo ENV_LEAK; else echo ENV_CLEAN; fi`, "probe", secret}, time.Second*10)
+		version, versionErr := host.Run(ctx, []string{curl, "--disable", "--version"}, 5*time.Second)
+		network, networkErr := host.Run(ctx, append([]string{curl}, arguments...), 5*time.Second)
 		if closeErr := host.Close(); closeErr != nil {
 			t.Error(closeErr)
 		}
 		if err != nil || result.ExitCode != 0 || !strings.Contains(result.Stdout, "READ_DENIED") || !strings.Contains(result.Stdout, "ENV_CLEAN") || strings.Contains(result.Stdout, "LEAK") {
 			t.Fatalf("native credential boundary failed: %+v %v", result, err)
+		}
+		if versionErr != nil || version.ExitCode != 0 || !strings.Contains(version.Stdout, "curl ") {
+			t.Fatalf("native network-probe executable unavailable: %+v %v", version, versionErr)
+		}
+		if networkErr != nil || network.ExitCode == 0 || strings.Contains(network.Stdout, "owned-network-canary") || requests.Load() != 1 {
+			t.Fatalf("native network denial failed: %+v %v requests=%d", network, networkErr, requests.Load())
 		}
 		want := "WRITE_DENIED"
 		if writable {
