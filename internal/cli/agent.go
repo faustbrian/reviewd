@@ -14,7 +14,7 @@ import (
 
 func (e *execution) skillCommand(purpose string, deps Dependencies) *cobra.Command {
 	private := false
-	command := &cobra.Command{Use: purpose + " <pr-url>", Short: "Run the configured " + purpose + " skill with your normal Codex settings", Args: cobra.ExactArgs(1)}
+	command := &cobra.Command{Use: purpose + " <pr-url>", Short: "Run the configured " + purpose + " skill with your selected native agent settings", Args: cobra.ExactArgs(1)}
 	if purpose == "review" {
 		command.Flags().BoolVar(&private, "private", false, "Ask the review skill for a private, read-only review")
 	}

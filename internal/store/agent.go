@@ -8,12 +8,12 @@ import (
 )
 
 // ClaimAgent cannot reinterpret a historical private-review or feedback broker
-// run. Only a newly created ordinary Codex execution carries this discriminator.
+// run. Only ordinary native executions carry these discriminators.
 func (s *Store) ClaimAgent(ctx context.Context, id string) (bool, error) {
 	result, err := s.db.ExecContext(ctx, `UPDATE runs SET state='running',updated_at=? WHERE id=? AND state='queued'
- AND json_extract(record,'$.executor')=?
+ AND json_extract(record,'$.executor') IN (?,?)
  AND COALESCE(json_extract(record,'$.cancellation_requested'),0)=0
- AND COALESCE(json_extract(record,'$.superseded'),0)=0`, timestamp(), id, NativeExecutor)
+ AND COALESCE(json_extract(record,'$.superseded'),0)=0`, timestamp(), id, NativeExecutor, ClaudeExecutor)
 	if err != nil {
 		return false, err
 	}
@@ -22,7 +22,7 @@ func (s *Store) ClaimAgent(ctx context.Context, id string) (bool, error) {
 }
 
 func (s *Store) RecordAgent(ctx context.Context, id, thread, model string, usage json.RawMessage, preview ...string) error {
-	if !executionIdentifier(thread) || !executionIdentifier(model) {
+	if !executionIdentifier(thread) || (model != "" && !executionIdentifier(model)) {
 		return errors.New("normal agent progress requires session and requested model identity")
 	}
 	if len(usage) == 0 {
@@ -38,8 +38,9 @@ func (s *Store) RecordAgent(ctx context.Context, id, thread, model string, usage
 	result, err := s.db.ExecContext(ctx, `UPDATE runs SET thread_id=?,
  record=json_set(record,'$.requested_model',?,'$.usage',json(?),
  '$.progress',CASE WHEN ?='' THEN COALESCE(json_extract(record,'$.progress'),'') ELSE ? END),updated_at=?
- WHERE id=? AND state='running' AND json_extract(record,'$.executor')=?
- AND (COALESCE(thread_id,'')='' OR thread_id=?)`, thread, model, string(usage), text, text, timestamp(), id, NativeExecutor, thread)
+ WHERE id=? AND state='running' AND json_extract(record,'$.executor') IN (?,?)
+ AND (?!='' OR json_extract(record,'$.executor')=?)
+ AND (COALESCE(thread_id,'')='' OR thread_id=?)`, thread, model, string(usage), text, text, timestamp(), id, NativeExecutor, ClaudeExecutor, model, ClaudeExecutor, thread)
 	return changed(result, err, "could not record normal agent progress")
 }
 
@@ -53,6 +54,6 @@ func (s *Store) FinishAgent(ctx context.Context, id string, state State, outcome
 		return errors.New("normal agent outcome is invalid JSON")
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE runs SET state=?,outcome=?,failure=?,updated_at=?
- WHERE id=? AND state IN ('queued','running') AND json_extract(record,'$.executor')=?`, state, string(outcome), diagnostic, timestamp(), id, NativeExecutor)
+ WHERE id=? AND state IN ('queued','running') AND json_extract(record,'$.executor') IN (?,?)`, state, string(outcome), diagnostic, timestamp(), id, NativeExecutor, ClaudeExecutor)
 	return changed(result, err, "could not record normal agent outcome")
 }

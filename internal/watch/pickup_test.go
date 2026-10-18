@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -51,6 +52,10 @@ instructions='project-instructions-%s'
 [projects."owner/repo".limits]
 feedback_timeout='%s'
 `, version, version, effort, version, timeout)
+	}
+	if version == "new" {
+		text = strings.ReplaceAll(text, "[reviewer]", "[reviewer]\nbackend='claude'")
+		text = strings.ReplaceAll(text, "[feedback]", "[feedback]\nbackend='claude'")
 	}
 	return []byte(text)
 }
@@ -109,17 +114,21 @@ func assertPickupSelection(t *testing.T, run store.Run, request agent.Request, l
 	if manual {
 		model, effort = "manual-model", "low"
 	}
-	if request.Skill != skill || request.Model != model || request.Effort != effort || request.Instructions != instructions {
+	backend := "codex"
+	if version == "new" {
+		backend = "claude"
+	}
+	if request.Backend != backend || request.Executable != backend || request.Skill != skill || request.Model != model || request.Effort != effort || request.Instructions != instructions {
 		t.Fatalf("picked-up selection changed: %+v", request)
 	}
 	var policy config.Snapshot
 	if err := json.Unmarshal(run.Configuration, &policy); err != nil {
 		t.Fatal(err)
 	}
-	if policy.String(prefix+"skill") != skill || policy.String(prefix+"model") != model || policy.String(prefix+"reasoning_effort") != effort || policy.String(instructionsKey) != instructions || policy.Duration("limits."+lane+"_timeout") != timeout {
+	if policy.String(prefix+"backend") != backend || policy.String(prefix+"skill") != skill || policy.String(prefix+"model") != model || policy.String(prefix+"reasoning_effort") != effort || policy.String(instructionsKey) != instructions || policy.Duration("limits."+lane+"_timeout") != timeout {
 		t.Fatalf("persisted selection differs from picked-up request: %s", run.Configuration)
 	}
-	if run.State != store.AgentCompleted || run.Executor != store.NativeExecutor || run.Purpose != lane || run.ThreadID == "" || run.RequestedModel != model {
+	if run.State != store.AgentCompleted || run.Executor != backend+"_exec_v1" || run.Purpose != lane || run.ThreadID == "" || run.RequestedModel != model {
 		t.Fatalf("lost factual native completion: %+v", run)
 	}
 }

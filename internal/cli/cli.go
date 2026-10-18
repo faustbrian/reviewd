@@ -49,9 +49,9 @@ func (e *commandError) Error() string        { return e.message }
 func failure(code int, message string) error { return &commandError{code, message} }
 
 type execution struct {
-	path, profile, model, effort string
-	json                         bool
-	resultCode                   int
+	path, profile, model, effort, backend, executable string
+	json                                              bool
+	resultCode                                        int
 }
 type preferenceReport struct {
 	State   string `json:"state"`
@@ -130,6 +130,8 @@ func Run(ctx context.Context, args []string, output, diagnostics io.Writer, deps
 	flags.StringVar(&options.path, "config", "", "Explicit global configuration path")
 	flags.StringVar(&options.profile, "profile", "default", "Named local profile")
 	flags.BoolVar(&options.json, "json", false, "Emit stable JSON without presentation text")
+	flags.StringVar(&options.backend, "backend", "", "Override this command's agent backend: codex or claude")
+	flags.StringVar(&options.executable, "executable", "", "Override this command's native agent executable")
 	flags.StringVar(&options.model, "model", "", "Override this command's agent model (reviewer or feedback handler)")
 	flags.StringVar(&options.effort, "reasoning-effort", "", "Override reasoning effort for this command")
 	configure := &cobra.Command{Use: "config", Short: "Inspect effective configuration"}
@@ -279,6 +281,12 @@ func safeReport[T any](value T) (T, bool, error) {
 }
 func (e *execution) overrides(command *cobra.Command) map[string]any {
 	result := map[string]any{}
+	if command.Flags().Changed("backend") {
+		result["reviewer.backend"] = e.backend
+	}
+	if command.Flags().Changed("executable") {
+		result["reviewer.executable"] = e.executable
+	}
 	if command.Flags().Changed("model") {
 		result["reviewer.model"] = e.model
 	}

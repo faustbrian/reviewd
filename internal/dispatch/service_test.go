@@ -205,7 +205,7 @@ func TestExecutionSerializesBothSkillLanesAcrossProfiles(t *testing.T) {
 		t.Fatal("first lane never started")
 	}
 	go func() {
-		_, err := secondService.Run(ctx, nil, Job{Target: target, Purpose: "feedback"})
+		_, err := secondService.Run(ctx, nil, Job{Target: target, Purpose: "feedback", Overrides: map[string]any{"feedback.backend": "claude"}})
 		secondDone <- err
 	}()
 	select {

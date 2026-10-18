@@ -15,7 +15,7 @@ and license notices into the output metadata and checksums. It refuses an
 existing output directory. `--smoke` runs only for the host's native target and
 checks version, help and shell completion. Packaging does not publish a release.
 
-Install GitHub CLI and Codex CLI separately and configure them normally. No
+Install GitHub CLI and your selected Codex CLI or Claude Code separately and configure them normally. No
 launchd/systemd job or persistent machine configuration is installed by reviewd.
 A user may run `watch --headless` under their own supervisor if desired; the
 foreground command remains the same on both supported operating systems.
@@ -24,7 +24,7 @@ foreground command remains the same on both supported operating systems.
 
 Choose a published tag from [Releases](https://github.com/faustbrian/reviewd/releases).
 `v1.0.0` below is an example, not a claim that a release already exists. This
-installs only the executable; GitHub CLI and Codex remain separate prerequisites.
+installs only the executable; GitHub CLI and the selected agent remain separate prerequisites.
 
 ```sh
 set -eu

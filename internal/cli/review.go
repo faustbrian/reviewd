@@ -86,7 +86,7 @@ func (e *execution) presentRun(output io.Writer, run store.Run) error {
 		return writeJSON(output, map[string]any{"schema_version": 1, "run": json.RawMessage(safe), "redacted": safe != string(data)})
 	}
 	fmt.Fprintf(output, "%s agent %s\nRepository: %s #%d\nState: %s\n", terminalText(run.Purpose), run.ID, terminalText(run.Repository), run.Number, run.State)
-	if run.Executor != store.NativeExecutor {
+	if !store.IsNativeExecutor(run.Executor) {
 		fmt.Fprintln(output, "Historical workflow run; retained read-only and never automatically replayed.")
 		encoded, err := json.MarshalIndent(run, "", "  ")
 		if err != nil {
@@ -98,8 +98,9 @@ func (e *execution) presentRun(output io.Writer, run store.Run) error {
 	if run.Archive != nil {
 		fmt.Fprintf(output, "Agent text expired at %s; run identity remains.\n", terminalText(run.Archive.ExpiredAt))
 	}
+	fmt.Fprintf(output, "Backend: %s\n", agent.Label(run.Backend()))
 	if run.ThreadID != "" {
-		fmt.Fprintf(output, "Codex session: %s\n", terminalText(run.ThreadID))
+		fmt.Fprintf(output, "%s session: %s\n", agent.Label(run.Backend()), terminalText(run.ThreadID))
 	}
 	if run.RequestedModel != "" {
 		fmt.Fprintf(output, "Requested model: %s\n", terminalText(run.RequestedModel))
@@ -114,6 +115,9 @@ func (e *execution) presentRun(output io.Writer, run store.Run) error {
 	if len(run.Outcome) > 0 && json.Unmarshal(run.Outcome, &outcome) != nil {
 		return failure(1, "stored agent outcome is invalid")
 	}
+	if outcome.Model != "" {
+		fmt.Fprintf(output, "Native model: %s\n", terminalText(outcome.Model))
+	}
 	if outcome.Text != "" {
 		fmt.Fprintln(output, terminalText(outcome.Text))
 	}
@@ -124,7 +128,7 @@ func (e *execution) presentRun(output io.Writer, run store.Run) error {
 		fmt.Fprintln(output, terminalText(run.Failure))
 	}
 	if run.State == store.AgentCompleted {
-		fmt.Fprintln(output, "Codex execution completed. Delivery follows the selected skill; reviewd does not verify those effects.")
+		fmt.Fprintf(output, "%s execution completed. Delivery follows the selected skill; reviewd does not verify those effects.\n", agent.Label(run.Backend()))
 	}
 	return nil
 }

@@ -49,10 +49,13 @@ var definitions = map[string]definition{
 	"agent.working_directory":       {"", globalScope | projectScope | cliScope},
 	"feedback.instructions":         {"", globalScope | projectScope | cliScope},
 	"reviewer.model":                {"gpt-6.1-sol", globalScope | projectScope | cliScope},
+	"reviewer.backend":              {"codex", globalScope | projectScope | cliScope},
+	"feedback.backend":              {"codex", globalScope | projectScope | cliScope},
+	"feedback.executable":           {"", globalScope | projectScope | cliScope},
 	"reviewer.reasoning_effort":     {"high", globalScope | projectScope | repositoryScope | cliScope},
 	"reviewer.skill":                {"review", globalScope | projectScope | cliScope},
 	"reviewer.skill_path":           {"", globalScope | projectScope | cliScope},
-	"reviewer.executable":           {"codex", globalScope | cliScope},
+	"reviewer.executable":           {"codex", globalScope | projectScope | cliScope},
 	"reviewer.auth_home":            {"", globalScope | cliScope},
 	"reviewer.exclude_authors":      {[]string{"@me"}, globalScope | projectScope | cliScope},
 	"feedback.authors":              {[]string{"@me"}, globalScope | projectScope},
@@ -219,7 +222,7 @@ func (s *Snapshot) UnmarshalJSON(data []byte) error {
 	_, hasAuthors := wire.Values["reviewer.exclude_authors"]
 	hasFeedback, feedbackCount := false, 0
 	for key := range definitions {
-		if feedbackSetting(key) && !containerSetting(key) && !metadataSetting(key) && key != "feedback.label_catalog" && key != "feedback.instructions" {
+		if feedbackSetting(key) && !backendSetting(key) && !containerSetting(key) && !metadataSetting(key) && key != "feedback.label_catalog" && key != "feedback.instructions" {
 			feedbackCount++
 			if _, present := wire.Values[key]; present {
 				hasFeedback = true
@@ -240,6 +243,19 @@ func (s *Snapshot) UnmarshalJSON(data []byte) error {
 	_, hasFeedbackInstructions := wire.Values["feedback.instructions"]
 	launcher := wire.Values["schema_version"] == json.Number("2") || hasWorkingDirectory || hasFeedbackInstructions
 	expected := len(definitions)
+	backendCount := 0
+	for key := range definitions {
+		if backendSetting(key) {
+			if _, ok := wire.Values[key]; ok {
+				backendCount++
+			}
+		}
+	}
+	if backendCount == 0 {
+		expected -= 3
+	} else if backendCount != 3 || !launcher {
+		return errors.New("configuration snapshot has an incomplete backend selection")
+	}
 	if launcher {
 		for key := range definitions {
 			if obsoleteSetting(key) {
@@ -310,10 +326,13 @@ func (s *Snapshot) UnmarshalJSON(data []byte) error {
 			legacyLabels := key == "feedback.label_catalog" && !hasLabelCatalog
 			legacyLauncher := !launcher && (key == "agent.working_directory" || key == "feedback.instructions")
 			removedWorkflow := launcher && obsoleteSetting(key)
-			if !legacyLauncher && !removedWorkflow && !legacyContainer && !legacyMetadata && !legacyLabels && key != "reviewer.exclude_authors" && (!feedbackSetting(key) || hasFeedback) {
+			if !backendSetting(key) && !legacyLauncher && !removedWorkflow && !legacyContainer && !legacyMetadata && !legacyLabels && key != "reviewer.exclude_authors" && (!feedbackSetting(key) || hasFeedback) {
 				return errors.New("configuration snapshot is missing a required setting")
 			}
 			validationValues[key] = copyValue(definition.value)
+			if key == "feedback.executable" {
+				validationValues[key] = "codex"
+			}
 		}
 	}
 	if err := validate(validationValues); err != nil {
@@ -415,9 +434,6 @@ func resolve(document *Document, repository string, preferences *RepositoryPrefe
 		delete(values, "schema_version") // Repository preferences have a separate, limited schema.
 		apply(values, Origin{Layer: "repository", Source: ".reviewd", Revision: preferences.BaseSHA})
 	}
-	if err := validate(result.values); err != nil {
-		return result, err
-	}
 	identityHost := result.String("github.host")
 	if value, ok := overrides["github.host"].(string); ok {
 		identityHost = value
@@ -444,6 +460,7 @@ func resolve(document *Document, repository string, preferences *RepositoryPrefe
 		result.values[key] = normalized
 		result.origins[key] = Origin{Layer: "cli"}
 	}
+	result.backendDefaults()
 	if err := validate(result.values); err != nil {
 		return result, err
 	}
@@ -609,6 +626,7 @@ var keyPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 var revisionPattern = regexp.MustCompile(`^[a-f0-9]{40}([a-f0-9]{24})?$`)
 var segmentPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
 var hostPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]*[a-z0-9]$`)
+var skillPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}(?::[A-Za-z0-9][A-Za-z0-9._-]{0,99})?$`)
 var modelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
 var credentialPattern = regexp.MustCompile(`^(sk[-_]|gh[opusr]_|github_pat_)`)
 var authorPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\[bot\])?$`)
@@ -630,8 +648,11 @@ func validate(values map[string]any) error {
 	// live snapshot or rewriting historical values and their fingerprints.
 	var temporary []string
 	for key, definition := range definitions {
-		if _, present := values[key]; !present && (obsoleteSetting(key) || key == "agent.working_directory" || key == "feedback.instructions") {
+		if _, present := values[key]; !present && (backendSetting(key) || obsoleteSetting(key) || key == "agent.working_directory" || key == "feedback.instructions") {
 			values[key] = copyValue(definition.value)
+			if key == "feedback.executable" {
+				values[key] = "codex"
+			}
 			temporary = append(temporary, key)
 		}
 	}
@@ -716,23 +737,44 @@ func validate(values map[string]any) error {
 		return errors.New("state.retention_days must be between 1 and 3650")
 	}
 	for _, key := range []string{"reviewer.reasoning_effort", "feedback.reasoning_effort"} {
-		if !oneOf(values[key].(string), "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra") {
+		backend := values[strings.TrimSuffix(key, "reasoning_effort")+"backend"].(string)
+		valid := oneOf(values[key].(string), "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+		if backend == "claude" {
+			valid = oneOf(values[key].(string), "", "low", "medium", "high", "xhigh", "max")
+		}
+		if !valid {
 			return fmt.Errorf("%s must be an advertised reasoning level", key)
 		}
 	}
-	for _, key := range []string{"reviewer.model", "reviewer.skill", "reviewer.executable", "feedback.model", "feedback.skill"} {
+	for _, key := range []string{"reviewer.skill", "reviewer.executable", "feedback.executable", "feedback.skill"} {
 		if strings.TrimSpace(values[key].(string)) == "" || strings.ContainsRune(values[key].(string), 0) {
 			return fmt.Errorf("%s must be a nonempty identifier or path", key)
 		}
 	}
 	for _, key := range []string{"reviewer.skill", "feedback.skill"} {
-		if value := values[key].(string); !segmentPattern.MatchString(value) || credentialPattern.MatchString(value) {
+		if value := values[key].(string); !skillPattern.MatchString(value) || credentialPattern.MatchString(value) {
 			return fmt.Errorf("%s must be an installed skill name, not a path or credential", key)
 		}
 	}
 	for _, key := range []string{"reviewer.model", "feedback.model"} {
-		if value := values[key].(string); !modelPattern.MatchString(value) || credentialPattern.MatchString(value) {
+		value := values[key].(string)
+		backend := values[strings.TrimSuffix(key, "model")+"backend"].(string)
+		if value == "" && backend == "claude" {
+			continue
+		}
+		if !modelPattern.MatchString(value) || credentialPattern.MatchString(value) {
 			return fmt.Errorf("%s must be a model identifier, not a credential", key)
+		}
+		if backend == "claude" && strings.HasPrefix(value, "gpt-") {
+			return fmt.Errorf("%s selects a Codex model for Claude; select a Claude model or an empty native default", key)
+		}
+	}
+	for _, prefix := range []string{"reviewer.", "feedback."} {
+		if !oneOf(values[prefix+"backend"].(string), "codex", "claude") {
+			return fmt.Errorf("%sbackend must be codex or claude", prefix)
+		}
+		if value := values[prefix+"executable"].(string); strings.ContainsRune(value, 0) {
+			return fmt.Errorf("%sexecutable must not contain NUL", prefix)
 		}
 	}
 	for _, key := range []string{"reviewer.skill_path", "feedback.skill_path", "reviewer.auth_home", "state.directory", "review.instructions", "feedback.instructions", "agent.working_directory"} {

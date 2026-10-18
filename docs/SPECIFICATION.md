@@ -1,7 +1,7 @@
 # Product specification
 
 Reviewd is a personal Go CLI for macOS and Linux, amd64 and arm64. Each operator
-uses their existing GitHub and Codex accounts. It is a trigger and inbox, not an
+uses their existing GitHub and selected native-agent accounts. It is a trigger and inbox, not an
 agent workflow implementation or shared bot service.
 
 ## Responsibilities
@@ -14,8 +14,9 @@ agent workflow implementation or shared bot service.
    with limited target-base repository preferences.
 5. Route events to ignore, notification, a manual start choice, or automatic
    dispatch. Hold initial backlog; deduplicate durable event decisions.
-6. Launch a fresh ordinary Codex session with `$review <url>` or
-   `$handle-pr-feedback <url>` (or configured replacement skill names).
+6. Launch a fresh ordinary Codex or Claude Code session with the native skill
+   syntax (`$skill` for Codex, `/skill` for Claude), including review or
+   feedback handling (or configured replacement skill names).
 7. Bound concurrent child processes, serialize both lanes for a PR across local
    profiles, coalesce later observations and report process outcomes.
 8. Provide durable history, cancellation, notifications, personal holds,
@@ -29,8 +30,8 @@ replies, re-review requests, thread resolution, metadata, labels and any Linear,
 Better Stack or other MCP usage. Reviewd does not implement or enforce these
 workflows, broker their tools, or certify their delivery.
 
-The child inherits normal Codex configuration and permissions. Reviewd does not
-create a sealed Codex home, strip credentials, disable MCP/plugins/multi-agent,
+The child inherits normal native-agent configuration and permissions. Reviewd does not
+create a sealed agent home, strip credentials, disable MCP/plugins/multi-agent,
 force a sandbox, or inject a private-only publication policy. Optional user
 instructions and `review --private` are prompt text, not capability controls.
 
@@ -48,7 +49,7 @@ preparation, including its skill, model, effort, instructions and total timeout
 budget. Reloads affect later pickups, not a job already preparing. Discovered
 work that encounters a busy PR returns queued and selects current settings on
 its next pickup. An explicit URL invocation keeps its selected one-off settings
-while waiting. This does not freeze Codex configuration, installed skills,
+while waiting. This does not freeze native-agent configuration, installed skills,
 MCP servers, tools or remote GitHub facts.
 
 Current durable event and personal-control checks can still prevent unclaimed
@@ -59,8 +60,8 @@ Explicit cancel, its selected timeout, and watcher shutdown still stop it;
 native process or local ownership/storage failures remain factual failures.
 
 New runs have `queued`, `running`, `completed`, `failed`, `cancelled` or
-`interrupted` process states. `completed` requires a successful Codex process
-and native completed turn with a session identity. It does not mean published,
+`interrupted` process states. `completed` requires a successful native process
+and backend-specific successful terminal result with a session identity. It does not mean published,
 fixed, merged or deployed. A started job is never automatically replayed merely
 because its final outcome was lost. New events remain distinct work; an explicit
 manual URL command or start choice can intentionally launch another run.
@@ -88,5 +89,5 @@ hold future work/notifications, not publication by an accepted skill.
 
 Version tags drive four native quality/package jobs and complete release asset
 assembly. Development CI artifacts are not published releases. See
-[distribution](DISTRIBUTION.md), [Codex compatibility](CODEX.md), and concrete
+[distribution](DISTRIBUTION.md), [Codex compatibility](CODEX.md), [Claude compatibility](CLAUDE.md), and concrete
 [configuration/state locations](CONFIGURATION.md#file-locations-and-profiles).

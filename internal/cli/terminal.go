@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/faustbrian/reviewd/internal/agent"
 	"github.com/faustbrian/reviewd/internal/config"
 	"github.com/faustbrian/reviewd/internal/store"
 	"github.com/faustbrian/reviewd/internal/terminal"
@@ -112,7 +113,7 @@ func (e *execution) terminalSnapshot(ctx context.Context, durable *store.Store, 
 				prefix = "feedback."
 			}
 			entry.Model, entry.Effort = policy.String(prefix+"model"), policy.String(prefix+"reasoning_effort")
-			fmt.Fprintf(&text, "PR: %s\nWhy: %s\nTrigger: %s\nAction: %s\nSkill: $%s\nModel: %s / %s\n", item.URL, item.Explanation, item.Trigger, item.Action, policy.String(prefix+"skill"), entry.Model, entry.Effort)
+			fmt.Fprintf(&text, "PR: %s\nWhy: %s\nTrigger: %s\nAction: %s\nCurrent selection — backend: %s\nCurrent skill: %s%s\nCurrent model: %s / %s\n", item.URL, item.Explanation, item.Trigger, item.Action, agent.Label(policy.String(prefix+"backend")), map[string]string{"codex": "$", "claude": "/"}[policy.String(prefix+"backend")], policy.String(prefix+"skill"), entry.Model, entry.Effort)
 			if item.Category == "own_pr_feedback" {
 				fmt.Fprintln(&text, "Notification-only feedback. Configure the feedback lane to launch a handling skill.")
 			}

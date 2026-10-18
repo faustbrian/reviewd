@@ -2,7 +2,7 @@
 
 - `init`: create a private operator config without overwriting an existing file.
 - `doctor`: inspect configuration, GitHub account/repository access, storage and
-  the Codex executable. It does not start a model, probe MCP tools or certify
+  the selected native executables. It does not start a model, probe MCP tools or certify
   skill delivery.
 - `config explain <owner/repo> [--offline]`: settings and their provenance.
 - `sync`: discover work without launching agents.
@@ -17,7 +17,8 @@
   read-only/do-not-post prompt request; it is not a tool sandbox.
 - `feedback <pr-url>`: a fresh selected feedback-handling skill.
 - `start <item-id> [--event <event-key>]`: queue that event's configured skill.
-  `--model` and `--reasoning-effort` choose one-run settings for its lane.
+  `--backend`, `--executable`, `--model` and `--reasoning-effort` choose
+  one-run settings for its lane.
 - `skip <item-id> [--event <event-key>]`: skip this event, not future feedback.
 - `show <run-id>`: stored output, session identity and factual process state.
 - `cancel <run-id>`: request stop; this cannot undo an agent's external effects.
@@ -34,10 +35,10 @@
 - `completion bash|zsh|fish`: print shell completion, without installing it.
 
 Global `--json`, `--config` and `--profile` work without a desktop. Review and
-feedback commands accept one-run model/effort overrides. Normal Codex settings
+feedback commands accept one-run backend/executable/model/effort overrides. Normal native agent settings
 own any subsequent tools, MCP access, permissions, hooks and skill workflows.
 If a skill needs human continuation, inspect `show` and use the recorded session
-with Codex's own continuation interface; reviewd has no private answer broker.
+with the selected CLI's own continuation interface; reviewd has no private answer broker.
 
 ## Keyboard inbox
 

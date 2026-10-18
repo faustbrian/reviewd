@@ -139,10 +139,10 @@ func (s *Service) Pump(ctx context.Context, document *config.Document, force boo
 			continue
 		}
 		body := ""
-		if run.Executor == store.NativeExecutor {
+		if store.IsNativeExecutor(run.Executor) {
 			switch run.State {
 			case store.AgentCompleted, store.AgentInterrupted, store.Failed, store.Cancelled:
-				body = fmt.Sprintf("%s agent %s; inspect reviewd show %s. This is the execution outcome, not verification of the skill's effects.", run.Purpose, run.State, run.ID)
+				body = fmt.Sprintf("%s %s agent %s; inspect reviewd show %s. This is the execution outcome, not verification of the skill's effects.", run.Backend(), run.Purpose, run.State, run.ID)
 			}
 		} else {
 			if run.State == store.Reviewing || run.State == store.HandlingFeedback {

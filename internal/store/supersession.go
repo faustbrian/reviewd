@@ -13,7 +13,7 @@ func supersedeItemRuns(ctx context.Context, tx *sql.Tx, repository string, actor
  record=json_set(record,'$.superseded',json('true')),
  state=CASE WHEN state='reviewing' THEN state ELSE 'stale' END,
  failure='Review boundary or controlling requirements changed; this run does not certify the current pull request.',updated_at=?
- WHERE COALESCE(json_extract(record,'$.executor'),'')!='codex_exec_v1' AND COALESCE(json_extract(record,'$.purpose'),'review')!='feedback' AND repository=? AND actor_id=? AND pull_id=? AND state IN ('queued','waiting_checks','reviewing','prepared')
+ WHERE COALESCE(json_extract(record,'$.executor'),'') NOT IN ('codex_exec_v1','claude_exec_v1') AND COALESCE(json_extract(record,'$.purpose'),'review')!='feedback' AND repository=? AND actor_id=? AND pull_id=? AND state IN ('queued','waiting_checks','reviewing','prepared')
  AND id IN (SELECT json_extract(record,'$.run_id') FROM inbox_items WHERE repository=? AND actor_id=? AND pull_id=?)`, timestamp(), repository, actor, pull, repository, actor, pull)
 	if err != nil {
 		return err

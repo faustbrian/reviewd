@@ -8,7 +8,7 @@ a changed state directory requires a restart. Reloaded execution settings apply
 to later job pickups. Picking up a job freezes its reviewd operator settings,
 even while it prepares GitHub data; its timeout includes that preparation.
 Busy-PR discovered work returns queued and selects settings again on its next
-pickup. Normal Codex configuration, skills and MCP/tool access remain inherited,
+pickup. Normal native agent configuration, skills and MCP/tool access remain inherited,
 not copied or sealed. Running skills finish unless explicitly cancelled, timed
 out or stopped with the watcher.
 
@@ -24,7 +24,8 @@ never concatenate. Project identities are exact `owner/repo` or
 | `github.watch_review_requests`, `github.watch_own_prs` | Request discovery and notification-only own-PR monitoring |
 | `reviewer.exclude_authors` | PR authors excluded from discovered review work; defaults to `["@me"]` |
 | `reviewer.skill`, `reviewer.model`, `reviewer.reasoning_effort` | Review launch selection; defaults `review`, `gpt-6.1-sol`, `high` |
-| `reviewer.executable` | Codex executable, globally selected |
+| `reviewer.backend`, `feedback.backend` | Independent `codex` (default) or `claude` selection, global/exact-project/CLI |
+| `reviewer.executable`, `feedback.executable` | Native executable paths, global/exact-project/CLI; backend-aware defaults |
 | `feedback.authors`, `feedback.action` | Independent feedback subscription and `ignore`, `notify`, `ask`, or `auto` routing |
 | `feedback.skill`, `feedback.model`, `feedback.reasoning_effort` | Handler selection; defaults `handle-pr-feedback`, `gpt-6.1-sol`, `high` |
 | `review.instructions`, `feedback.instructions` | Additional prompt text; feedback uses its own nonempty instructions or the common review instructions |
@@ -49,6 +50,38 @@ handler model does not subscribe it.
 and `auto` queues it. The first observed backlog remains held for an explicit
 choice. Notifications and elapsed time never choose an action. Legacy incoming
 feedback actions do not silently opt in to automatic feedback handling.
+
+## Native agent selection
+
+Both lanes default to Codex and retain `gpt-6.1-sol` / `high`. Selecting Claude
+changes only built-in model/effort defaults to empty strings: omit the native
+flags and inherit Claude's normal model/effort settings. Explicit global or
+project values are never silently replaced. If a global Codex model or effort
+is explicit, override it in a Claude project with a valid choice or `""` to
+inherit Claude's native default. Claude effort accepts `low`, `medium`, `high`,
+`xhigh`, `max`, or `""`; available levels depend on the selected native model.
+
+```toml
+[projects."acme/bill".feedback]
+backend = "claude"
+model = "sonnet"
+reasoning_effort = "high"
+# Optional: executable = "/absolute/path/to/claude"
+```
+
+Selecting a backend alone does not enable feedback monitoring. Review and
+feedback backend defaults are independent, so selecting Claude for reviews does
+not implicitly change the feedback lane. Existing Codex-only configurations
+keep their shared `reviewer.executable` meaning for feedback; when review uses
+Claude and feedback uses Codex, feedback defaults to `codex`. An explicit
+`feedback.executable` overrides that compatibility fallback.
+
+`--backend`, `--executable`, `--model` and `--reasoning-effort` override the lane
+selected by `review`, `feedback`, or an inbox `start`. `init` and
+`config explain` apply review-lane overrides; `watch` rejects one-run overrides
+and uses operator configuration instead. `init --backend claude` creates a
+Claude review default without requiring Codex. Backend choices and executable
+paths are operator-owned, never repository `.reviewd` settings.
 
 ## Repository preferences
 

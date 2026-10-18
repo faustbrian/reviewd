@@ -25,6 +25,7 @@ const (
 	AgentCompleted     State = "completed"
 	AgentInterrupted   State = "interrupted"
 	NativeExecutor           = "codex_exec_v1"
+	ClaudeExecutor           = "claude_exec_v1"
 	HandlingFeedback   State = "handling_feedback"
 	FeedbackPending    State = "feedback_pending"
 	FeedbackDelivered  State = "feedback_delivered"

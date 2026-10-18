@@ -36,7 +36,7 @@ const retentionEligible = `state IN ('failed','cancelled','stale','published')
 // Only proven completed native executions are eligible. Interrupted/failed
 // output may be the operator's only record of work that needs inspection.
 const nativeRetentionEligible = `state='completed'
- AND json_extract(record,'$.executor')='codex_exec_v1'
+ AND json_extract(record,'$.executor') IN ('codex_exec_v1','claude_exec_v1')
  AND COALESCE(json_extract(record,'$.owner_closed'),0)=1
  AND json_extract(record,'$.archive') IS NULL`
 

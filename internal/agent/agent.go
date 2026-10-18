@@ -1,4 +1,4 @@
-// Package agent launches ordinary Codex CLI sessions. Skills own their workflows.
+// Package agent launches ordinary native CLI sessions. Skills own their workflows.
 package agent
 
 import (
@@ -17,11 +17,13 @@ import (
 )
 
 type Request struct {
+	Backend                                                        string
 	Executable, Directory, Skill, URL, Model, Effort, Instructions string
 	Diagnostics                                                    io.Writer
 	OnProgress                                                     func(Output) error
 }
 type Output struct {
+	Model      string          `json:"model,omitempty"`
 	ThreadID   string          `json:"thread_id,omitempty"`
 	Text       string          `json:"text,omitempty"`
 	Activity   string          `json:"activity,omitempty"`
@@ -29,6 +31,14 @@ type Output struct {
 	Diagnostic string          `json:"diagnostic,omitempty"`
 	Usage      json.RawMessage `json:"usage,omitempty"`
 }
+
+func Label(backend string) string {
+	if backend == "claude" {
+		return "Claude Code"
+	}
+	return "Codex"
+}
+
 type executor func(context.Context, *exec.Cmd) error
 
 func Run(ctx context.Context, request Request) (Output, error) {
@@ -39,22 +49,45 @@ func run(ctx context.Context, request Request, execute executor) (Output, error)
 	if request.Skill == "" || request.URL == "" {
 		return Output{}, errors.New("agent launch requires a skill and PR URL")
 	}
-	if request.Executable == "" {
-		request.Executable = "codex"
+	if request.Backend == "" {
+		request.Backend = "codex"
 	}
-	if request.Model == "" {
+	if request.Backend != "codex" && request.Backend != "claude" {
+		return Output{}, errors.New("unknown agent backend")
+	}
+	if request.Executable == "" {
+		request.Executable = request.Backend
+	}
+	if request.Model == "" && request.Backend == "codex" {
 		request.Model = "gpt-6.1-sol"
 	}
-	if request.Effort == "" {
+	if request.Effort == "" && request.Backend == "codex" {
 		request.Effort = "high"
 	}
 	prompt := "$" + request.Skill + " " + request.URL
+	if request.Backend == "claude" {
+		prompt = "/" + request.Skill + " " + request.URL
+	}
 	if request.Instructions != "" {
 		prompt += "\n\n" + request.Instructions
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	command := exec.CommandContext(ctx, request.Executable, "exec", "--json", "--model", request.Model, "-c", "model_reasoning_effort="+strconv.Quote(request.Effort), "--skip-git-repo-check", prompt)
+	args := []string{"exec", "--json", "--model", request.Model, "-c", "model_reasoning_effort=" + strconv.Quote(request.Effort), "--skip-git-repo-check", prompt}
+	if request.Backend == "claude" {
+		// Claude Code CLI reference: print + verbose stream-json loads ordinary
+		// skills/MCP/settings. No --bare, permission override or resume flags.
+		// https://code.claude.com/docs/en/headless
+		args = []string{"--print", "--output-format", "stream-json", "--verbose"}
+		if request.Model != "" {
+			args = append(args, "--model", request.Model)
+		}
+		if request.Effort != "" {
+			args = append(args, "--effort", request.Effort)
+		}
+		args = append(args, prompt)
+	}
+	command := exec.CommandContext(ctx, request.Executable, args...)
 	// URL-driven skills may start from a monitoring directory, not a checkout.
 	// Codex exec documents --skip-git-repo-check for this case; it does not
 	// bypass configured permissions, sandboxing or hook trust.
@@ -66,13 +99,13 @@ func run(ctx context.Context, request Request, execute executor) (Output, error)
 	if request.Diagnostics != nil {
 		command.Stderr = io.MultiWriter(diagnostic, request.Diagnostics)
 	}
-	stream := &events{progress: request.OnProgress, cancel: cancel}
+	stream := &events{backend: request.Backend, progress: request.OnProgress, cancel: cancel}
 	command.Stdout = stream
 	err := execute(ctx, command)
 	stream.finish()
 	if text := strings.TrimSpace(string(diagnostic.tail)); text != "" {
 		if diagnostic.truncated {
-			text = "[Earlier Codex diagnostics omitted after the 16 MiB capture limit.]\n" + text
+			text = "[Earlier agent diagnostics omitted after the 16 MiB capture limit.]\n" + text
 		}
 		if stream.output.Diagnostic != "" {
 			stream.output.Diagnostic += "\n"
@@ -80,10 +113,12 @@ func run(ctx context.Context, request Request, execute executor) (Output, error)
 		stream.output.Diagnostic += text
 	}
 	if err != nil || stream.err != nil {
+		stream.output.Completed = false
 		return stream.output, errors.Join(err, stream.err)
 	}
 	if !stream.output.Completed || stream.output.ThreadID == "" {
-		return stream.output, errors.New("Codex exited without a completed turn and session identity; inspect the run before retrying")
+		stream.output.Completed = false
+		return stream.output, fmt.Errorf("%s exited without a completed turn and session identity; inspect the run before retrying", request.Backend)
 	}
 	return stream.output, nil
 }
@@ -113,6 +148,7 @@ func (d *diagnostics) Write(p []byte) (int, error) {
 }
 
 type events struct {
+	backend  string
 	pending  []byte
 	output   Output
 	progress func(Output) error
@@ -136,7 +172,7 @@ func (s *events) Write(data []byte) (int, error) {
 			n = i
 		}
 		if len(s.pending)+n > maxFrame {
-			s.fail(errors.New("Codex JSONL frame exceeds 16 MiB"))
+			s.fail(errors.New("agent JSONL frame exceeds 16 MiB"))
 			return 0, s.err
 		}
 		s.pending = append(s.pending, data[:n]...)
@@ -161,6 +197,10 @@ func (s *events) finish() {
 func (s *events) fail(err error) { s.err = err; s.output.Completed = false; s.cancel() }
 func (s *events) consume(data []byte) {
 	if len(bytes.TrimSpace(data)) == 0 {
+		return
+	}
+	if s.backend == "claude" {
+		s.consumeClaude(data)
 		return
 	}
 	var event struct {

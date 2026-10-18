@@ -7,17 +7,17 @@ it is not merely a change to uncommitted plans.
 ## Configuration and local history
 
 The public operator format is `schema_version = 1`, as is the limited repository
-preference format. Reviewd has not released a v1 product yet; there is no public
-v2 adoption step. Archived run snapshots keep their recorded formats and
+preference format. Backend selection does not introduce a public v2 adoption
+step. Archived run snapshots keep their recorded formats and
 fingerprints independently of the live configuration and database counters.
 Configure `auto` only when the selected ordinary skill should run with your
-normal Codex configuration and tools. No config file is automatically rewritten.
+normal native agent configuration and tools. No config file is automatically rewritten.
 
 Remove these settings: `reviewer.skill_path`, `reviewer.auth_home`,
 `feedback.skill_path`, `actions.publish_review`, `feedback.container_endpoint`,
 `feedback.container_image`, `feedback.metadata_validators`,
 `feedback.metadata_profile`, and `feedback.label_catalog`. Configure skills,
-MCP servers, tools and workflow rules in Codex or the selected prompts instead.
+MCP servers, tools and workflow rules in the native agent or the selected prompts instead.
 The default review skill is now `review`, not `requesting-code-review`.
 
 Repository `.reviewd` files retain their separate limited schema version 1.
@@ -58,3 +58,11 @@ No standalone Linear API client had been pushed. An unfinished, uncommitted
 tracker-configuration experiment was discarded. The removed behavior was
 reviewd's attempt to own/enforce issue, label, metadata and delivery workflows;
 those responsibilities belong to the user's skills, prompts and normal MCPs.
+
+## Adding Claude Code
+
+Existing configuration and stored Codex runs remain Codex; backend omission
+never reinterprets their executable or session. Select Claude per lane/project
+with the new backend settings described in [configuration](CONFIGURATION.md#native-agent-selection).
+No public configuration version change or history rewrite is required. Reviewd
+never resumes a Codex conversation in Claude or vice versa.

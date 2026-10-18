@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/faustbrian/reviewd/internal/agent"
 	"github.com/faustbrian/reviewd/internal/config"
 	"github.com/faustbrian/reviewd/internal/github"
 	"github.com/spf13/cobra"
@@ -29,6 +30,8 @@ type diagnosticReport struct {
 	Redacted       bool             `json:"redacted,omitempty"`
 }
 type policyReport struct {
+	Backend         string `json:"backend"`
+	FeedbackBackend string `json:"feedback_backend"`
 	Scope           string `json:"scope"`
 	ReviewRequested string `json:"review_requested"`
 	NewPullRequest  string `json:"new_pull_request"`
@@ -42,7 +45,7 @@ func policy(snapshot config.Snapshot) policyReport {
 	if scope == "" {
 		scope = "global"
 	}
-	return policyReport{scope, snapshot.String("actions.review_requested"), snapshot.String("actions.new_pull_request"), snapshot.String("actions.head_updated"), snapshot.String("reviewer.model"), snapshot.String("reviewer.reasoning_effort")}
+	return policyReport{Scope: scope, ReviewRequested: snapshot.String("actions.review_requested"), NewPullRequest: snapshot.String("actions.new_pull_request"), HeadUpdated: snapshot.String("actions.head_updated"), Model: snapshot.String("reviewer.model"), ReasoningEffort: snapshot.String("reviewer.reasoning_effort"), Backend: snapshot.String("reviewer.backend"), FeedbackBackend: snapshot.String("feedback.backend")}
 }
 func (e *execution) doctorCommand(deps Dependencies) *cobra.Command {
 	command := &cobra.Command{Use: "doctor", Short: "Check account, review settings and prerequisites without reviewing PRs", Args: cobra.NoArgs}
@@ -83,8 +86,14 @@ func (e *execution) initCommand(deps Dependencies) *cobra.Command {
 		if err != nil {
 			return failure(2, err.Error())
 		}
-		configuration := strings.Replace(initialConfiguration, `model = "gpt-6.1-sol"`, "model = "+strconv.Quote(selected.String("reviewer.model")), 1)
-		configuration = strings.Replace(configuration, `reasoning_effort = "high"`, "reasoning_effort = "+strconv.Quote(selected.String("reviewer.reasoning_effort")), 1)
+		configuration := initialConfiguration
+		additions := ""
+		for _, setting := range []struct{ flag, key, value string }{{"backend", "backend", selected.String("reviewer.backend")}, {"executable", "executable", selected.String("reviewer.executable")}, {"model", "model", selected.String("reviewer.model")}, {"reasoning-effort", "reasoning_effort", selected.String("reviewer.reasoning_effort")}} {
+			if command.Flags().Changed(setting.flag) {
+				additions += setting.key + " = " + strconv.Quote(setting.value) + "\n"
+			}
+		}
+		configuration = strings.Replace(configuration, "[reviewer]\n", "[reviewer]\n"+additions, 1)
 		document, err = config.Parse([]byte(configuration), path)
 		if err != nil {
 			return failure(2, err.Error())
@@ -206,7 +215,7 @@ func (e *execution) presentDiagnostics(output io.Writer, report diagnosticReport
 		fmt.Fprintf(output, "GitHub identity: %s (id %d)\n", report.Identity.Login, report.Identity.ID)
 	}
 	for _, item := range report.Policies {
-		fmt.Fprintf(output, "%s: requested=%s new=%s updated=%s; %s / %s\n", item.Scope, item.ReviewRequested, item.NewPullRequest, item.HeadUpdated, item.Model, item.ReasoningEffort)
+		fmt.Fprintf(output, "%s: requested=%s new=%s updated=%s; backend=%s feedback=%s; %s / %s\n", item.Scope, item.ReviewRequested, item.NewPullRequest, item.HeadUpdated, item.Backend, item.FeedbackBackend, item.Model, item.ReasoningEffort)
 	}
 	for _, item := range report.Diagnostics {
 		fmt.Fprintf(output, "%s: %s", item.Status, item.Check)
@@ -249,25 +258,50 @@ func probeDirectory(path string) error {
 	return os.Remove(owned)
 }
 
+// Retains the existing dependency-hook name for callers; probes native agents
+// independently and only checks availability/version, never model or MCP access.
 func probeCodex(ctx context.Context, scopes []config.Snapshot) []Diagnostic {
-	if len(scopes) == 0 {
-		return nil
+	var result []Diagnostic
+	seen := map[string]bool{}
+	if len(scopes) > 1 {
+		scopes = scopes[1:]
 	}
-	executable, err := exec.LookPath(scopes[0].String("reviewer.executable"))
-	if err != nil {
-		return []Diagnostic{{Check: "Codex CLI", Status: "error", Message: "Configured Codex executable is unavailable.", Correction: "Install Codex CLI or correct reviewer.executable."}}
+	for _, policy := range scopes {
+		for _, prefix := range []string{"reviewer.", "feedback."} {
+			if prefix == "feedback." && !policy.FeedbackMonitoringConfigured() && policy.Provenance()[prefix+"backend"].Layer == "built-in" {
+				continue
+			}
+			backend := policy.String(prefix + "backend")
+			if backend == "" {
+				backend = "codex"
+			}
+			selected := policy.String(prefix + "executable")
+			key := backend + "\x00" + selected
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			label := agent.Label(backend)
+			executable, err := exec.LookPath(selected)
+			if err != nil {
+				result = append(result, Diagnostic{Check: label + " CLI", Status: "error", Message: "Configured native executable is unavailable.", Correction: "Install " + label + " or correct " + prefix + "executable."})
+				continue
+			}
+			probe, cancel := context.WithTimeout(ctx, 10*time.Second)
+			version, err := exec.CommandContext(probe, executable, "--version").Output()
+			cancel()
+			if err != nil {
+				result = append(result, Diagnostic{Check: label + " CLI", Status: "error", Message: "Native CLI version could not be read.", Correction: "Check the configured executable."})
+				continue
+			}
+			result = append(result, Diagnostic{Check: label + " CLI", Status: "ok", Message: strings.TrimSpace(string(version))}, Diagnostic{Check: label + " settings", Status: "warning", Message: "Agents inherit normal native authentication, skills, MCP servers and tools. Doctor does not start an agent or validate provider/model access.", Correction: "Configure and authenticate " + label + " normally; use a manual review or feedback action to validate execution."})
+		}
 	}
-	probe, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	version, err := exec.CommandContext(probe, executable, "--version").Output()
-	if err != nil {
-		return []Diagnostic{{Check: "Codex CLI", Status: "error", Message: "Codex version could not be read.", Correction: "Check the configured executable."}}
-	}
-	return []Diagnostic{{Check: "Codex CLI", Status: "ok", Message: strings.TrimSpace(string(version))}, {Check: "Codex settings", Status: "warning", Message: "Agents inherit your normal Codex authentication, skills, MCP servers and tools. Doctor does not start an agent or validate provider/model access.", Correction: "Configure and authenticate Codex normally; use a manual review or feedback action to validate execution."}}
+	return result
 }
 
 const initialConfiguration = `# Personal reviewd configuration. Select repositories and action policies below.
-# Skills run with your normal Codex configuration and tool permissions.
+# Skills run with your selected native agent configuration and tool permissions.
 schema_version = 1
 
 [github]
@@ -275,8 +309,6 @@ host = "github.com"
 repositories = []
 
 [reviewer]
-model = "gpt-6.1-sol"
-reasoning_effort = "high"
 skill = "review"
 
 [actions]

@@ -140,14 +140,14 @@ func AcquireExecutionLease(ctx context.Context, directory string, key ExecutionL
 }
 
 func (m *ExecutionLease) matches(run store.Run) bool {
-	return (run.Purpose == "feedback" || run.Executor == store.NativeExecutor) && run.RepositoryID == m.key.RepositoryID && run.PullID == m.key.PullID && strings.Split(run.Repository, "/")[0] == m.key.Host && run.OwnerID != ""
+	return (run.Purpose == "feedback" || store.IsNativeExecutor(run.Executor)) && run.RepositoryID == m.key.RepositoryID && run.PullID == m.key.PullID && strings.Split(run.Repository, "/")[0] == m.key.Host && run.OwnerID != ""
 }
 
 // Attach is persisted before any source/model/command child starts. A service
 // persists process ownership, not a skill-workflow or GitHub-effect decision.
 func (m *ExecutionLease) Attach(ctx context.Context, profile *store.Store, runID string) error {
 	run, err := profile.Get(ctx, runID)
-	if err != nil || run.Executor != store.NativeExecutor || !m.matches(run) || run.OwnerClosed || (run.State != store.Queued && run.State != store.AgentRunning) {
+	if err != nil || !store.IsNativeExecutor(run.Executor) || !m.matches(run) || run.OwnerClosed || (run.State != store.Queued && run.State != store.AgentRunning) {
 		return errors.New("agent owner pointer requires this PR's current queued/handling run and private owner")
 	}
 	locked, err := m.lock.Info()

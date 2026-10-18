@@ -509,7 +509,7 @@ func (m *model) View() tea.View {
 	if status == "" {
 		status = m.snapshot.Status
 	}
-	lines = append(lines, line(status), line(footer), line("Skills own their workflows and tools; completed means Codex finished."))
+	lines = append(lines, line(status), line(footer), line("Skills own their workflows and tools; completed means the selected native agent finished."))
 	if len(lines) > height {
 		lines = lines[:height]
 	}
@@ -528,6 +528,6 @@ a pause/resume project; z snooze duration (d edits); Z until new commits; u unsn
 o open PR; O open a historical recorded GitHub review conversation.
 r refresh; l monitoring log; ? help; q detach; Ctrl-C interrupt.
 y confirms a pending choice. Escape/n dismiss without changing the decision.
-A running skill uses your normal Codex settings, tools and MCP servers.
+A running skill uses your normal native agent settings, tools and MCP servers.
 Reviewd does not manage the skill's review or feedback workflow.
 No mouse reporting is enabled: ordinary drag remains terminal-owned.`

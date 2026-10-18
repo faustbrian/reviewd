@@ -54,3 +54,10 @@ action = "auto"
 # Optional operator-selected context for project tools and local instructions:
 # [projects."acme/bill".agent]
 # working_directory = "/absolute/path/to/bill"
+
+# Optional mixed backend: keep Codex review giving and use Claude for feedback.
+# [projects."acme/bill".feedback]
+# backend = "claude"
+# model = "sonnet"
+# reasoning_effort = "high"
+# Merge these keys into the existing project feedback table above.

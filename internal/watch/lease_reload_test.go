@@ -143,7 +143,7 @@ func TestBusyDiscoveredSkillsUseFreshSettingsOnNextAdmission(t *testing.T) {
 					skill = "feedback-new"
 					prefix = "feedback."
 				}
-				if request.Skill != skill || request.Model != "model-new" || request.Effort != "high" || request.Instructions != "instructions-new" {
+				if request.Backend != "claude" || request.Executable != "claude" || request.Skill != skill || request.Model != "model-new" || request.Effort != "high" || request.Instructions != "instructions-new" {
 					t.Fatalf("stale launch after reload: %+v", request)
 				}
 				runs, err = second.List(ctx)
@@ -151,7 +151,7 @@ func TestBusyDiscoveredSkillsUseFreshSettingsOnNextAdmission(t *testing.T) {
 					t.Fatalf("wrong run count: %+v %v", runs, err)
 				}
 				var snapshot config.Snapshot
-				if json.Unmarshal(runs[0].Configuration, &snapshot) != nil || snapshot.String(prefix+"skill") != skill || snapshot.String(prefix+"model") != "model-new" || snapshot.String(prefix+"reasoning_effort") != "high" || snapshot.String(map[string]string{"review": "review.instructions", "feedback": "feedback.instructions"}[lane]) != "instructions-new" || snapshot.Duration("limits."+map[string]string{"review": "review", "feedback": "feedback"}[lane]+"_timeout") != 2*time.Minute {
+				if json.Unmarshal(runs[0].Configuration, &snapshot) != nil || snapshot.String(prefix+"backend") != "claude" || snapshot.String(prefix+"skill") != skill || snapshot.String(prefix+"model") != "model-new" || snapshot.String(prefix+"reasoning_effort") != "high" || snapshot.String(map[string]string{"review": "review.instructions", "feedback": "feedback.instructions"}[lane]) != "instructions-new" || snapshot.Duration("limits."+map[string]string{"review": "review", "feedback": "feedback"}[lane]+"_timeout") != 2*time.Minute {
 					t.Fatalf("persisted stale settings: %s", runs[0].Configuration)
 				}
 			default:

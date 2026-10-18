@@ -184,7 +184,11 @@ func (s Service) Run(ctx context.Context, document *config.Document, job Job) (r
 	if err != nil {
 		return run, err
 	}
-	candidate := store.Run{Executor: store.NativeExecutor, Purpose: job.Purpose, OwnerID: owner.ID, Repository: pull.Repository, RepositoryID: pull.RepositoryID, PullID: pull.ID, Number: pull.Number, ActorID: actor.ID, ActorLogin: actor.Login, WorkKey: workKey, State: store.Queued, Private: job.Private, Configuration: configuration, Context: target}
+	executor := store.NativeExecutor
+	if policy.String(prefix+"backend") == "claude" {
+		executor = store.ClaudeExecutor
+	}
+	candidate := store.Run{Executor: executor, Purpose: job.Purpose, OwnerID: owner.ID, Repository: pull.Repository, RepositoryID: pull.RepositoryID, PullID: pull.ID, Number: pull.Number, ActorID: actor.ID, ActorLogin: actor.Login, WorkKey: workKey, State: store.Queued, Private: job.Private, Configuration: configuration, Context: target}
 	var created bool
 	if job.Item == nil {
 		run, created, err = s.Store.Create(ctx, candidate)
@@ -223,7 +227,7 @@ func (s Service) Run(ctx context.Context, document *config.Document, job Job) (r
 		if launch == nil {
 			launch = agent.Run
 		}
-		output, err = launch(owner.Context(ctx), agent.Request{Executable: policy.String("reviewer.executable"), Directory: policy.String("agent.working_directory"), Skill: policy.String(prefix + "skill"), URL: pull.URL, Model: policy.String(prefix + "model"), Effort: policy.String(prefix + "reasoning_effort"), Instructions: instructions, OnProgress: func(progress agent.Output) error {
+		output, err = launch(owner.Context(ctx), agent.Request{Backend: policy.String(prefix + "backend"), Executable: policy.String(prefix + "executable"), Directory: policy.String("agent.working_directory"), Skill: policy.String(prefix + "skill"), URL: pull.URL, Model: policy.String(prefix + "model"), Effort: policy.String(prefix + "reasoning_effort"), Instructions: instructions, OnProgress: func(progress agent.Output) error {
 			if progress.ThreadID == "" {
 				return nil
 			}

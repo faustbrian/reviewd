@@ -55,6 +55,35 @@ func TestAgentRunStoresExecutionNotDelivery(t *testing.T) {
 		t.Fatalf("completed event replayed: %v %v", claimed, err)
 	}
 }
+
+func TestClaudeRunClaimsAndRecordsNativeDefaultModel(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, filepath.Join(t.TempDir(), "profile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	run, _, err := s.Create(ctx, Run{Executor: "claude_exec_v1", Purpose: "review", Repository: "github.com/acme/api", RepositoryID: 99, PullID: 700, Number: 17, ActorID: 43, ActorLogin: "operator", WorkKey: "claude-event", State: Queued, Configuration: json.RawMessage(`{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := s.ClaimAgent(ctx, run.ID); err != nil || !claimed {
+		t.Fatalf("Claude run not claimable: %v / %v", claimed, err)
+	}
+	if err := s.RecordAgent(ctx, run.ID, "claude-session", "", nil, "Reading feedback"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishAgent(ctx, run.ID, AgentCompleted, json.RawMessage(`{"thread_id":"claude-session","completed":true}`), ""); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := s.ClaimAgent(ctx, run.ID); err != nil || claimed {
+		t.Fatalf("completed Claude run replayed: %v %v", claimed, err)
+	}
+	got, err := s.Get(ctx, run.ID)
+	if err != nil || got.State != AgentCompleted || got.ThreadID != "claude-session" || got.RequestedModel != "" {
+		t.Fatalf("wrong native identity %+v / %v", got, err)
+	}
+}
 func TestAgentClaimCannotConvertLegacyReviewConsent(t *testing.T) {
 	ctx := context.Background()
 	s, err := Open(ctx, filepath.Join(t.TempDir(), "profile"))
@@ -156,37 +185,42 @@ func TestAgentUpgradePreservesLegacyHistoryWithoutReplay(t *testing.T) {
 }
 
 func TestAgentRecoveryRecordsInterruptedExecutionWithoutReplay(t *testing.T) {
-	ctx := context.Background()
-	s, err := Open(ctx, filepath.Join(t.TempDir(), "profile"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	owner, err := s.BeginPrivateOwner(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	run, _, err := s.Create(ctx, Run{Executor: NativeExecutor, Purpose: "feedback", OwnerID: owner.ID, Repository: "github.com/owner/repo", RepositoryID: 99, PullID: 700, Number: 17, ActorID: 43, ActorLogin: "operator", WorkKey: "interrupted-native-event", State: Queued, Configuration: json.RawMessage(`{}`)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if claimed, err := s.ClaimAgent(ctx, run.ID); err != nil || !claimed {
-		t.Fatal("claim", err)
-	}
-	if err := owner.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.RecoverPrivate(ctx, false); err != nil {
-		t.Fatal(err)
-	}
-	got, err := s.Get(ctx, run.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.State != AgentInterrupted {
-		t.Fatalf("lost normal agent became a feedback workflow or remained active: %s", got.State)
-	}
-	if claimed, err := s.ClaimAgent(ctx, run.ID); err != nil || claimed {
-		t.Fatal("interrupted agent replayed", err)
+	for _, executor := range []string{NativeExecutor, ClaudeExecutor} {
+		t.Run(executor, func(t *testing.T) {
+			ctx := context.Background()
+			s, err := Open(ctx, filepath.Join(t.TempDir(), "profile"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			owner, err := s.BeginPrivateOwner(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run, _, err := s.Create(ctx, Run{Executor: executor, Purpose: "feedback", OwnerID: owner.ID, Repository: "github.com/owner/repo", RepositoryID: 99, PullID: 700, Number: 17, ActorID: 43, ActorLogin: "operator", WorkKey: "interrupted-native-event", State: Queued, Configuration: json.RawMessage(`{}`)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if claimed, err := s.ClaimAgent(ctx, run.ID); err != nil || !claimed {
+				t.Fatal("claim", err)
+			}
+			if err := owner.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.RecoverPrivate(ctx, false); err != nil {
+				t.Fatal(err)
+			}
+			got, err := s.Get(ctx, run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.State != AgentInterrupted {
+				t.Fatalf("lost normal agent became a feedback workflow or remained active: %s", got.State)
+			}
+			if claimed, err := s.ClaimAgent(ctx, run.ID); err != nil || claimed {
+				t.Fatal("interrupted agent replayed", err)
+			}
+
+		})
 	}
 }
