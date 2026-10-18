@@ -14,29 +14,73 @@ configuration, authentication, MCP servers, plugins and tool permissions. Review
 has no Linear integration, review publisher, feedback-fixing engine, command
 sandbox, specialist workflow or external delivery policy.
 
-## Start
+## Quickstart
 
-Install `gh` and your chosen Codex CLI or Claude Code, authenticate them normally,
-and install your chosen
-review and feedback skills. Build with Go 1.26 or use a native package produced
-by this repository's CI. Supported targets are macOS/Linux, amd64/arm64. See
-[archive installation](docs/DISTRIBUTION.md) and
-[Codex capabilities](docs/CODEX.md) and [Claude Code support](docs/CLAUDE.md).
+Install Git, Go 1.26+, [just](https://github.com/casey/just), GitHub CLI (`gh`),
+and your chosen Codex CLI or Claude Code. Authenticate GitHub with `gh auth login`,
+authenticate the agent normally, and install your review and feedback skills.
+Supported platforms are macOS and Linux on amd64/arm64.
 
 ```sh
-go install github.com/faustbrian/reviewd/cmd/reviewd@main
+git clone https://github.com/faustbrian/reviewd.git
+cd reviewd
+just install
+export PATH="$HOME/.local/bin:$PATH"
 reviewd init
-# Edit the reported config path: select repositories and action policies.
+```
+
+`just install` installs into `~/.local/bin`; keep that directory on your shell's
+`PATH`. Use `just install /path/to/bin` for another destination. For Claude
+reviews, use `reviewd init --backend claude` instead. You can also install a
+[published archive](docs/DISTRIBUTION.md) without Go or just.
+
+Open the configuration file printed by `init`. Set the following, editing
+existing sections instead of duplicating them. Replace `acme/api` with your
+repository:
+
+```toml
+[github]
+repositories = ["acme/api"]
+
+[actions]
+new_pull_request = "ask"
+review_requested = "ask"
+head_updated = "ask"
+
+# Also offer to handle incoming feedback on your own PRs.
+[feedback]
+authors = ["@me"]
+action = "ask"
+```
+
+For a Claude-only setup, add `backend = "claude"` to `[feedback]` as well;
+review and feedback backends are independent.
+
+Start monitoring:
+
+```sh
 reviewd doctor
-reviewd sync
-reviewd inbox
 reviewd watch
 ```
 
-`watch` offers a keyboard inbox on an interactive terminal. Use
-`watch --headless` for foreground monitoring without the attachment, or
-`watch --headless --once --json` for one poll and its eligible work. A service
-manager is optional; there is no required launchd or systemd installation.
+`watch` continuously polls GitHub and opens a keyboard inbox. Select an item,
+press `s` to start its configured skill, then `y` to confirm. Change the relevant
+`"ask"` policies to `"auto"` for automatic handling of new events, or `"notify"`
+for notifications only. The first observed backlog stays held for an explicit
+choice even with automatic policies.
+
+For monitoring without the keyboard inbox, keep this running in a terminal:
+
+```sh
+reviewd watch --headless
+```
+
+Both modes run in the foreground; Ctrl-C stops monitoring. `q` also closes the
+interactive watcher. A service manager is optional, not installed by reviewd.
+Use `reviewd sync` and `reviewd inbox` to inspect work without launching agents,
+or `reviewd watch --headless --once --json` for one poll and its eligible work.
+
+### Manual actions
 
 ```sh
 reviewd review https://github.com/owner/repo/pull/17
@@ -55,6 +99,23 @@ one-off actions and do not subscribe a repository or apply discovery filters.
 
 Use exact-project sections to notify for `acme/api` and automate
 `acme/bill`; see [the example](examples/config.toml).
+
+## Development
+
+Run `just` to list commands:
+
+| Command | Purpose |
+| --- | --- |
+| `just install` | Build and install into `~/.local/bin` |
+| `just build` | Build `./reviewd` |
+| `just run --help` | Build and run the local binary with any CLI arguments |
+| `just test` | Run all Go tests with race detection |
+| `just test ./internal/config -run TestBackend` | Run focused Go tests |
+| `just vet` | Run Go static analysis |
+| `just test-scripts` | Test packaging/release scripts without publication |
+| `just check` | Run the CI quality gate, including four-target builds |
+
+Python 3 is required for `just test-scripts` and `just check`.
 
 ## Boundaries
 
