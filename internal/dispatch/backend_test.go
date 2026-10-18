@@ -34,8 +34,8 @@ func TestMixedBackendsUseLaneSelectionAndDurableNativeOutcomes(t *testing.T) {
 					if r.Backend != want || r.Executable != want {
 						t.Fatalf("wrong lane backend: %+v; want %s", r, want)
 					}
-					if want == "claude" && (r.Model != "" || r.Effort != "") {
-						t.Fatal("Codex defaults leaked into Claude")
+					if want == "claude" && (r.Model != "claude-opus-5-5" || r.Effort != "") {
+						t.Fatalf("Claude did not receive Opus 5.5 with native effort: %+v", r)
 					}
 					output := agent.Output{ThreadID: want + "-fresh", Text: "Finished", Completed: true, Activity: "Inspecting feedback", Usage: json.RawMessage(`{"input_tokens":11,"output_tokens":3}`)}
 					if err := r.OnProgress(output); err != nil {

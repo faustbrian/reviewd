@@ -4,7 +4,10 @@ Select `reviewer.backend = "claude"` and/or `feedback.backend = "claude"` in
 operator configuration, or use `--backend claude` for a manual action. Install
 and authenticate Claude Code normally; Codex is not required for Claude-only
 operation. [Configuration](CONFIGURATION.md#native-agent-selection) covers mixed
-lanes, project overrides, executables and native model/effort defaults.
+lanes, project overrides, executables and model/effort defaults. Claude lanes
+default to [Opus 5.5](https://platform.claude.com/docs/en/models/opus-5-5/overview)
+(`claude-opus-5-5`), with native effort. Explicit model overrides, including
+`model = ""` to inherit Claude's native model setting, remain supported.
 
 ## Native contract
 

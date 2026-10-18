@@ -54,9 +54,9 @@ feedback actions do not silently opt in to automatic feedback handling.
 ## Native agent selection
 
 Both lanes default to Codex and retain `gpt-6.1-sol` / `high`. Selecting Claude
-changes only built-in model/effort defaults to empty strings: omit the native
-flags and inherit Claude's normal model/effort settings. Explicit global or
-project values are never silently replaced. If a global Codex model or effort
+changes the built-in model default to Opus 5.5 (`claude-opus-5-5`) and leaves
+effort native (an empty string omits that flag). Explicit global or project
+values are never silently replaced. If a global Codex model or effort
 is explicit, override it in a Claude project with a valid choice or `""` to
 inherit Claude's native default. Claude effort accepts `low`, `medium`, `high`,
 `xhigh`, `max`, or `""`; available levels depend on the selected native model.

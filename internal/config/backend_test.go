@@ -28,7 +28,7 @@ backend="codex"
 	if err != nil {
 		t.Fatal(err)
 	}
-	for key, want := range map[string]string{"reviewer.backend": "codex", "reviewer.executable": "my-codex", "reviewer.model": "gpt-6.1-sol", "reviewer.reasoning_effort": "high", "feedback.backend": "claude", "feedback.executable": "claude", "feedback.model": "", "feedback.reasoning_effort": ""} {
+	for key, want := range map[string]string{"reviewer.backend": "codex", "reviewer.executable": "my-codex", "reviewer.model": "gpt-6.1-sol", "reviewer.reasoning_effort": "high", "feedback.backend": "claude", "feedback.executable": "claude", "feedback.model": "claude-opus-5-5", "feedback.reasoning_effort": ""} {
 		if got := base.String(key); got != want {
 			t.Errorf("%s=%q, want %q", key, got, want)
 		}

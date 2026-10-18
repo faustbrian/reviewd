@@ -47,9 +47,9 @@ reviewd show <run-id>
 ```
 
 Both lanes default to Codex (`gpt-6.1-sol`, `high`). Select Claude independently
-with `reviewer.backend` or `feedback.backend`; Claude inherits its native model
-and effort unless explicitly configured. Review discovery excludes
-`@me` by default. Feedback handling is independently opt-in and can select only
+with `reviewer.backend` or `feedback.backend`; Claude defaults to Opus 5.5
+(`claude-opus-5-5`) with native effort unless explicitly configured. Review
+discovery excludes `@me` by default. Feedback handling is independently opt-in and can select only
 your own PRs, other named authors, or both. Manual URL commands are explicit
 one-off actions and do not subscribe a repository or apply discovery filters.
 

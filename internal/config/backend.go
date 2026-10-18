@@ -11,9 +11,9 @@ func (s *Snapshot) backendDefaults() {
 	for _, prefix := range []string{"reviewer.", "feedback."} {
 		backend := s.String(prefix + "backend")
 		if backend == "claude" {
-			for _, key := range []string{"model", "reasoning_effort"} {
+			for key, value := range map[string]string{"model": "claude-opus-5-5", "reasoning_effort": ""} {
 				if s.origins[prefix+key].Layer == "built-in" {
-					s.values[prefix+key] = ""
+					s.values[prefix+key] = value
 				}
 			}
 			if s.origins[prefix+"executable"].Layer == "built-in" {
