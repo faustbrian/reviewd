@@ -1,0 +1,355 @@
+//go:build darwin || linux
+
+package store
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/faustbrian/reviewd/internal/containerapi"
+	"github.com/faustbrian/reviewd/internal/lease"
+	"github.com/faustbrian/reviewd/internal/lifetime"
+)
+
+// SQLite owns resource identities and launch ambiguity. The kernel lease owns
+// liveness; neither timestamps nor saved process numbers can replace it.
+const ownerSchema = `CREATE TABLE IF NOT EXISTS private_owners (
+ id TEXT PRIMARY KEY, created_at TEXT NOT NULL, root_identity TEXT NOT NULL, lease_identity TEXT NOT NULL,
+ checked_at TEXT NOT NULL DEFAULT '', closing INTEGER NOT NULL DEFAULT 0 CHECK(closing IN (0,1)),
+ processes TEXT NOT NULL CHECK(json_valid(processes) AND json_type(processes)='object')
+);`
+
+var ownerIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+
+func rootIdentity(info os.FileInfo) (string, error) {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "", errors.New("cannot establish private root identity")
+	}
+	return fmt.Sprintf("%v:%v", stat.Dev, stat.Ino), nil
+}
+
+type PrivateOwner struct {
+	ID, Root string
+	store    *Store
+	lease    *lease.Lease
+	info     os.FileInfo
+	once     sync.Once
+	err      error
+}
+
+func privateDirectory(path string, create bool) (os.FileInfo, error) {
+	if create {
+		if err := os.Mkdir(path, 0700); err != nil && !errors.Is(err, os.ErrExist) {
+			return nil, err
+		}
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() || info.Mode().Perm()&0077 != 0 {
+		return nil, errors.New("private runtime storage must be a mode-0700 directory, not a symlink")
+	}
+	return info, nil
+}
+
+func (s *Store) BeginPrivateOwner(ctx context.Context) (owner *PrivateOwner, err error) {
+	parent := filepath.Join(s.directory, "private-work")
+	if _, err := privateDirectory(parent, true); err != nil {
+		return nil, err
+	}
+	id, err := newID()
+	if err != nil {
+		return nil, err
+	}
+	root := filepath.Join(parent, id)
+	if err := os.Mkdir(root, 0700); err != nil {
+		return nil, err
+	}
+	info, err := privateDirectory(root, false)
+	if err != nil {
+		return nil, err
+	}
+	owned := &PrivateOwner{ID: id, Root: root, store: s, info: info}
+	defer func() {
+		if err != nil {
+			if owned.lease != nil {
+				_ = owned.lease.Close()
+			}
+			_ = os.RemoveAll(root) // Exact directory created by this call only.
+		}
+	}()
+	owned.lease, err = lease.Acquire(filepath.Join(root, "owner.lock"), true)
+	if err != nil {
+		return nil, err
+	}
+	identity, identityErr := rootIdentity(info)
+	if identityErr != nil {
+		return nil, identityErr
+	}
+	leaseInfo, err := owned.lease.Info()
+	if err != nil {
+		return nil, err
+	}
+	leaseIdentity, identityErr := rootIdentity(leaseInfo)
+	if identityErr != nil {
+		return nil, identityErr
+	}
+	_, err = s.db.ExecContext(ctx, "INSERT INTO private_owners(id,created_at,root_identity,lease_identity,processes) VALUES(?,?,?,?,'{}')", id, timestamp(), identity, leaseIdentity)
+	if err != nil {
+		return nil, errors.New("cannot persist private resource ownership; no worker started")
+	}
+	return owned, nil
+}
+
+func (o *PrivateOwner) Context(ctx context.Context) context.Context {
+	return lifetime.WithScope(ctx, lifetime.Scope{Root: o.Root, Tracker: o})
+}
+
+type privateProcess struct {
+	owner *PrivateOwner
+	id    string
+}
+
+func (o *PrivateOwner) Starting(ctx context.Context) (lifetime.Process, error) {
+	if _, err := o.lease.Info(); err != nil {
+		return nil, errors.New("private process owner lease is closed")
+	}
+	id, err := newID()
+	if err != nil {
+		return nil, err
+	}
+	result, err := o.store.db.ExecContext(ctx, `UPDATE private_owners SET processes=json_set(processes,?,0)
+	 WHERE id=? AND closing=0 AND (SELECT count(*) FROM json_each(processes))<16`, processPath(id), o.ID)
+	// Generated hexadecimal keys need no escaping; use the canonical JSON path.
+	if err = changed(result, err, "cannot record private process launch"); err != nil {
+		return nil, err
+	}
+	return &privateProcess{owner: o, id: id}, nil
+}
+
+func processPath(id string) string { return `$."` + id + `"` }
+
+func (p *privateProcess) Started(ctx context.Context, group int) error {
+	if group <= 0 {
+		return errors.New("private process requires a positive group identity")
+	}
+	result, err := p.owner.store.db.ExecContext(ctx, `UPDATE private_owners SET processes=json_set(processes,?,?) WHERE id=? AND json_extract(processes,?)=0`, processPath(p.id), group, p.owner.ID, processPath(p.id))
+	return changed(result, err, "cannot persist private process group")
+}
+func (p *privateProcess) Finished(ctx context.Context) error {
+	result, err := p.owner.store.db.ExecContext(ctx, `UPDATE private_owners SET processes=json_remove(processes,?) WHERE id=?`, processPath(p.id), p.owner.ID)
+	return changed(result, err, "cannot close private process ownership")
+}
+
+// Native process groups and daemon-owned containers share the existing owner
+// and closing barrier. Legacy integer entries retain their exact interpretation.
+// Older clients reject the tagged container value and conservatively retain it.
+type ownedResources struct {
+	groups     map[string]int
+	containers map[string]containerapi.Resource
+	workspaces map[string]ownedFeedbackWorkspace
+}
+type ownedContainer struct {
+	Kind     string                `json:"kind"`
+	Resource containerapi.Resource `json:"resource"`
+}
+
+func decodeProcesses(raw, ownerID string) (ownedResources, error) {
+	resources := ownedResources{groups: map[string]int{}, containers: map[string]containerapi.Resource{}, workspaces: map[string]ownedFeedbackWorkspace{}}
+	var entries map[string]json.RawMessage
+	if len(raw) > 1<<20 || json.Unmarshal([]byte(raw), &entries) != nil || entries == nil || len(entries) > 16 {
+		return resources, errors.New("invalid private resource ownership; resources retained")
+	}
+	for id, value := range entries {
+		if !ownerIDPattern.MatchString(id) {
+			return resources, errors.New("invalid private resource identity; resources retained")
+		}
+		var group int
+		if json.Unmarshal(value, &group) == nil {
+			if group < 0 {
+				return resources, errors.New("invalid private process identity; resources retained")
+			}
+			resources.groups[id] = group
+			continue
+		}
+		if workspace, err := decodeFeedbackWorkspace(value, ownerID); err == nil {
+			resources.workspaces[id] = workspace
+			continue
+		}
+		reference, err := decodeContainer(value, ownerID, id)
+		if err != nil {
+			return resources, errors.New("invalid private container ownership; resources retained")
+		}
+		resources.containers[id] = reference
+	}
+	return resources, nil
+}
+func resourcesStopped(ctx context.Context, resources ownedResources) (bool, error) {
+	for _, group := range resources.groups {
+		if group == 0 {
+			return false, nil
+		}
+	}
+	for _, group := range resources.groups {
+		alive, err := lifetime.GroupAlive(ctx, group)
+		if err != nil {
+			return false, err
+		}
+		if alive {
+			return false, nil
+		}
+	}
+	for _, resource := range resources.containers {
+		if resource.ContainerID == "" {
+			return false, nil
+		}
+		client, err := containerapi.New(resource.Endpoint)
+		if err != nil {
+			return false, err
+		}
+		observation, err := client.Observe(ctx, resource)
+		_ = client.Close()
+		if err != nil {
+			return false, err
+		}
+		if observation.Present {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (s *Store) removePrivateRoot(ctx context.Context, id, root, observedProcesses string, info os.FileInfo) error {
+	resources, err := decodeProcesses(observedProcesses, id)
+	if err != nil {
+		return err
+	}
+	if len(resources.workspaces) > 0 {
+		return ErrFeedbackWorkspaceRetained
+	}
+	current, err := privateDirectory(root, false)
+	if errors.Is(err, os.ErrNotExist) {
+		return s.reconcileRemovedPrivateRoot(ctx, id, root)
+	}
+	if err != nil || !os.SameFile(info, current) {
+		return errors.New("private resource root changed; storage retained")
+	}
+	// This barrier both records proven child shutdown before file deletion and
+	// rejects any late launch. The exact process snapshot prevents a concurrent
+	// new registration from being mistaken for the already inspected groups.
+	result, err := s.db.ExecContext(ctx, `UPDATE private_owners SET closing=1,processes='{}' WHERE id=? AND (processes=? OR closing=1)`, id, observedProcesses)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		// A contender may finish after our identity read but before this CAS.
+		// Reconcile only completed deletion, never a changed live snapshot.
+		return s.reconcileRemovedPrivateRoot(ctx, id, root)
+	}
+	if err := os.RemoveAll(root); err != nil {
+		return errors.New("cannot remove owned private storage; run reviewd recover")
+	}
+	return s.finishPrivateOwner(ctx, id)
+}
+
+// Missing files alone do not prove shutdown. Another cleaner must have either
+// persisted its shutdown barrier or acknowledged it by removing the owner row.
+// This path never deletes storage, including a replacement at the same path.
+func (s *Store) reconcileRemovedPrivateRoot(ctx context.Context, id, root string) error {
+	if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+		return errors.New("private resource root changed; storage retained")
+	}
+	var closing bool
+	err := s.db.QueryRowContext(ctx, "SELECT closing FROM private_owners WHERE id=?", id).Scan(&closing)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !closing {
+		return errors.New("private execution changed before cleanup; storage retained")
+	}
+	return s.finishPrivateOwner(ctx, id)
+}
+
+func (s *Store) finishPrivateOwner(ctx context.Context, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	// Keep a compact shutdown fact on the durable run. If the process dies
+	// before its failure defer, recovery need not guess from a missing lease.
+	_, err = tx.ExecContext(ctx, `UPDATE runs SET record=json_set(record,'$.owner_closed',json('true')) WHERE json_extract(record,'$.owner_id')=? AND EXISTS(SELECT 1 FROM private_owners WHERE id=? AND closing=1)`, id, id)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM private_owners WHERE id=? AND closing=1", id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// Close runs after worker teardown and gates all source/skill/runtime storage
+// cleanup. An ambiguous child retains the complete shared private scope.
+func (o *PrivateOwner) Close() error {
+	return o.finish(false)
+}
+
+// SuspendFeedback releases the existing owner lease after positive command
+// shutdown, but keeps the same durable owner and pending workspace. Recovery
+// must not interpret quiescence as permission to delete unfinished work.
+func (o *PrivateOwner) SuspendFeedback() error {
+	return o.finish(true)
+}
+
+func (o *PrivateOwner) finish(suspend bool) error {
+	o.once.Do(func() {
+		defer o.lease.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var raw string
+		if err := o.store.db.QueryRowContext(ctx, "SELECT processes FROM private_owners WHERE id=?", o.ID).Scan(&raw); err != nil {
+			o.err = errors.New("cannot inspect private resource ownership; storage retained")
+			return
+		}
+		processes, err := decodeProcesses(raw, o.ID)
+		if err != nil {
+			o.err = err
+			return
+		}
+		stopped, err := resourcesStopped(ctx, processes)
+		if err != nil {
+			o.err = err
+			return
+		}
+		if !stopped {
+			o.err = errors.New("private child lifetime is unresolved; storage retained for reviewd recover")
+			return
+		}
+		if suspend {
+			if len(processes.workspaces) == 0 {
+				o.err = errors.New("feedback suspension requires its durable retained workspace")
+			}
+			return
+		}
+		o.err = o.store.removePrivateRoot(ctx, o.ID, o.Root, raw, o.info)
+	})
+	return o.err
+}

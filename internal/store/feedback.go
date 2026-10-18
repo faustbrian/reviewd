@@ -1,0 +1,71 @@
+package store
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+)
+
+func (s *Store) ClaimFeedback(ctx context.Context, id string) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `UPDATE runs SET state='handling_feedback',updated_at=? WHERE id=? AND state='queued' AND json_extract(record,'$.purpose')='feedback' AND COALESCE(json_extract(record,'$.cancellation_requested'),0)=0 AND EXISTS(SELECT 1 FROM private_owners WHERE id=json_extract(runs.record,'$.owner_id') AND closing=0)`, timestamp(), id)
+	if err != nil {
+		return false, errors.New("cannot claim queued feedback work")
+	}
+	count, err := result.RowsAffected()
+	return count == 1, err
+}
+
+// SaveFeedback records the canonical effect journal before/after each attempt.
+// It does not grant an effect or advance the lifecycle. The sole owning broker
+// remains responsible for target and current-policy checks before remote I/O.
+func (s *Store) SaveFeedback(ctx context.Context, id string, outcome json.RawMessage) error {
+	if len(outcome) > 8<<20 || !json.Valid(outcome) {
+		return errors.New("feedback outcome is invalid or exceeds 8 MiB")
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE runs SET outcome=?,updated_at=? WHERE id=? AND state='handling_feedback' AND json_extract(record,'$.purpose')='feedback'`, string(outcome), timestamp(), id)
+	return changed(result, err, "cannot persist feedback delivery facts")
+}
+
+func (s *Store) FinishFeedback(ctx context.Context, id string, state State, outcome json.RawMessage, diagnostic string) error {
+	if state != FeedbackDelivered && state != FeedbackPending && state != Partial && state != Failed && state != Cancelled {
+		return errors.New("invalid feedback terminal state")
+	}
+	if len(outcome) > 8<<20 || !json.Valid(outcome) {
+		return errors.New("feedback outcome is invalid or exceeds 8 MiB")
+	}
+	// Cache only the existing outcome's presentation fact, atomically with its
+	// terminal write. Owner closure is independently required; intermediate
+	// shutdown/finalization states cannot announce a completed response.
+	waiting := state == Partial && completedFeedbackResponse(outcome)
+	result, err := s.db.ExecContext(ctx, `UPDATE runs SET state=?,outcome=?,failure=?,updated_at=?,
+ record=json_set(record,'$.feedback_awaiting_human',json(CASE WHEN ? AND COALESCE(json_extract(record,'$.owner_closed'),0)=1 THEN 'true' ELSE 'false' END))
+ WHERE id=? AND state IN ('queued','handling_feedback') AND json_extract(record,'$.purpose')='feedback'`, state, string(outcome), diagnostic, timestamp(), waiting, id)
+	return changed(result, err, "cannot persist final feedback delivery state")
+}
+
+// ResumeFeedback requires an explicit action and the observed outcome CAS.
+// The caller holds the cross-profile modifier and an owned execution lease:
+// either a fresh owner after proven closure, or the reopened original retained
+// owner. A fresh agent preserves the prior execution/effect history.
+func (s *Store) ResumeFeedback(ctx context.Context, observed Run, owner string) (bool, error) {
+	if observed.Purpose != "feedback" || (observed.State != FeedbackPending && observed.State != Partial) || !ownerIDPattern.MatchString(owner) {
+		return false, errors.New("only explicit pending/partial feedback work can resume")
+	}
+	history := append([]json.RawMessage{}, observed.PriorExecutions...)
+	if observed.ThreadID != "" {
+		previous, _ := json.Marshal(map[string]any{"thread_id": observed.ThreadID, "turn_id": observed.TurnID, "requested_model": observed.RequestedModel, "effective_model": observed.EffectiveModel, "usage": observed.Usage})
+		history = append(history, previous)
+	}
+	raw, _ := json.Marshal(history)
+	result, err := s.db.ExecContext(ctx, `UPDATE runs SET state='handling_feedback',thread_id=NULL,turn_id=NULL,record=json_set(record,'$.owner_id',?,'$.owner_closed',json('false'),'$.feedback_awaiting_human',json('false'),'$.cancellation_requested',json('false'),'$.prior_executions',json(?)),updated_at=? WHERE id=? AND state=? AND COALESCE(outcome,'')=? AND json_extract(record,'$.purpose')='feedback'
+ AND (COALESCE(json_extract(record,'$.owner_closed'),0)=1 OR
+ (json_extract(record,'$.owner_id')=? AND EXISTS(
+ SELECT 1 FROM private_owners p,json_each(p.processes) resource WHERE p.id=? AND p.closing=0 AND resource.type='object'
+ AND json_extract(resource.value,'$.kind')='feedback_workspace' AND json_extract(resource.value,'$.owner_id')=p.id AND json_extract(resource.value,'$.run_id')=runs.id)))
+ AND json_extract(record,'$.owner_id')=? AND COALESCE(thread_id,'')=? AND COALESCE(turn_id,'')=? AND EXISTS(SELECT 1 FROM private_owners WHERE id=? AND closing=0)`, owner, string(raw), timestamp(), observed.ID, observed.State, string(observed.Outcome), owner, owner, observed.OwnerID, observed.ThreadID, observed.TurnID, owner)
+	if err != nil {
+		return false, errors.New("cannot claim explicit feedback reconciliation")
+	}
+	count, err := result.RowsAffected()
+	return count == 1, err
+}

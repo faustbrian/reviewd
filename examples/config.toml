@@ -1,0 +1,56 @@
+schema_version = 1
+
+[github]
+host = "github.com"
+repositories = ["acme/api", "acme/bill"]
+
+[reviewer]
+model = "gpt-6.1-sol"
+reasoning_effort = "high"
+skill = "review"
+exclude_authors = ["@me"]
+
+[feedback]
+authors = ["@me"]
+action = "ask"
+model = "gpt-6.1-sol"
+reasoning_effort = "high"
+skill = "handle-pr-feedback"
+instructions = ""
+
+[actions]
+new_pull_request = "ignore"
+review_requested = "ask"
+head_updated = "ask"
+review_submitted = "notify"
+review_comment_added = "notify"
+
+[notifications]
+desktop = true
+terminal = true
+
+[watch]
+poll_interval = "60s"
+debounce = "30s"
+
+[limits]
+max_concurrent_reviews = 2
+review_timeout = "30m"
+feedback_timeout = "60m"
+
+[projects."acme/api".actions]
+review_requested = "notify"
+
+[projects."acme/api".feedback]
+action = "notify"
+
+[projects."acme/bill".actions]
+review_requested = "auto"
+head_updated = "auto"
+
+[projects."acme/bill".feedback]
+action = "auto"
+
+# Optional operator-selected context for project tools and local instructions:
+# [projects."acme/bill".agent]
+# working_directory = "/absolute/path/to/bill"

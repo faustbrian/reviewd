@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  REVIEWD_SETUP_GO_SHA: 924ae3a1cded613372ab5595356fb5720e22ba16
+
+jobs:
+  quality:
+    name: Quality (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      # The release's SHA archive is unavailable; fetch the same pinned code
+      # through Git rather than rolling back its bundled security updates.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: actions/setup-go
+          ref: ${{ env.REVIEWD_SETUP_GO_SHA }}
+          path: .reviewd-ci/setup-go
+          persist-credentials: false
+      - name: Verify pinned Go setup action
+        run: test "$(git -C .reviewd-ci/setup-go rev-parse --verify 'HEAD^{commit}')" = "$REVIEWD_SETUP_GO_SHA"
+      - uses: ./.reviewd-ci/setup-go
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Tests, race detection, vet and target builds
+        run: python3 scripts/check.py
+
+  packages:
+    name: Package (${{ matrix.target }})
+    needs: quality
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: linux/amd64
+            artifact: linux-amd64
+          - os: ubuntu-24.04-arm
+            target: linux/arm64
+            artifact: linux-arm64
+          - os: macos-15
+            target: darwin/arm64
+            artifact: darwin-arm64
+          - os: macos-15-intel
+            target: darwin/amd64
+            artifact: darwin-amd64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: actions/setup-go
+          ref: ${{ env.REVIEWD_SETUP_GO_SHA }}
+          path: .reviewd-ci/setup-go
+          persist-credentials: false
+      - name: Verify pinned Go setup action
+        run: test "$(git -C .reviewd-ci/setup-go rev-parse --verify 'HEAD^{commit}')" = "$REVIEWD_SETUP_GO_SHA"
+      - uses: ./.reviewd-ci/setup-go
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Packaging behavior
+        run: python3 -B -m unittest discover -s scripts -p test_package.py -v
+      - name: Build immutable commit and smoke native binary
+        env:
+          PACKAGE_TARGET: ${{ matrix.target }}
+        run: python3 scripts/package.py --target "$PACKAGE_TARGET" --output dist --smoke
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reviewd-${{ matrix.artifact }}-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
