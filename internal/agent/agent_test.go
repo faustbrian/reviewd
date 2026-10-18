@@ -123,3 +123,45 @@ func TestLaunchRetainsStartupDiagnosticsWithoutAConfiguredSink(t *testing.T) {
 		t.Fatalf("startup failure became an opaque exit status: %+v %v", got, err)
 	}
 }
+
+func TestNativeActivityIsVisibleBeforeCompletion(t *testing.T) {
+	canary := "ghp_" + strings.Repeat("A", 36)
+	var statuses []string
+	got, err := run(context.Background(), Request{Skill: "review", URL: "https://github.com/acme/api/pull/7", OnProgress: func(output Output) error {
+		data, _ := json.Marshal(output)
+		statuses = append(statuses, string(data))
+		return nil
+	}}, func(_ context.Context, c *exec.Cmd) error {
+		frames := []string{
+			`{"type":"thread.started","thread_id":"live-session"}`,
+			`{"type":"item.started","item":{"type":"command_execution","command":"echo private-payload","status":"in_progress"}}`,
+			`{"type":"item.updated","item":{"type":"mcp_tool_call","server":"fixture","tool":"inspect","arguments":{"token":"private-argument"},"status":"in_progress"}}`,
+			`{"type":"item.completed","item":{"type":"agent_message","text":"Reading feedback ` + canary + `\u001b[31m"}}`,
+			`{"type":"future.unknown","payload":"not activity"}`,
+		}
+		for _, frame := range frames {
+			if _, err := io.WriteString(c.Stdout, frame+"\n"); err != nil {
+				return err
+			}
+		}
+		joined := strings.Join(statuses, "\n")
+		for _, want := range []string{"command_execution", "mcp_tool_call", "Reading feedback"} {
+			if !strings.Contains(joined, want) {
+				t.Fatalf("running activity missing %q: %s", want, joined)
+			}
+		}
+		for _, private := range []string{canary, "private-payload", "private-argument", `\u001b`} {
+			if strings.Contains(joined, private) {
+				t.Fatalf("unsafe activity retained %q", private)
+			}
+		}
+		if strings.Contains(joined, `"completed":true`) {
+			t.Fatal("activity certified completion")
+		}
+		_, err := io.WriteString(c.Stdout, `{"type":"turn.completed"}`+"\n")
+		return err
+	})
+	if err != nil || !got.Completed {
+		t.Fatalf("native completion lost: %+v %v", got, err)
+	}
+}

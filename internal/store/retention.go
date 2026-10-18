@@ -94,7 +94,7 @@ func (s *Store) ExpireArtifacts(ctx context.Context, observed Run, archive Archi
 		return false, err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `UPDATE runs SET record=json_set(json_remove(record,'$.context'),
+	result, err := tx.ExecContext(ctx, `UPDATE runs SET record=json_set(json_remove(record,'$.context','$.progress'),
  '$.configuration',json('{}'),'$.specialists',json(?),'$.archive',json(?)),prepared=NULL,outcome=?
  WHERE id=? AND state=? AND updated_at=? AND COALESCE(payload_id,'')=?
  AND COALESCE(prepared,'')=? AND COALESCE(outcome,'')=? AND ((`+retentionEligible+`) OR (`+nativeRetentionEligible+`))`,

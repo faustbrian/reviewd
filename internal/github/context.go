@@ -141,6 +141,20 @@ func (c *Client) rawPages(ctx context.Context, path string) ([]json.RawMessage, 
 // thread state and closing requirements. Access failures remain explicit gaps,
 // never empty-success evidence or permission to approve.
 func (c *Client) Context(ctx context.Context, pull Pull) (ReviewContext, error) {
+	return c.context(ctx, pull, true)
+}
+
+// DiscoveryContext acquires semantic trigger inputs, not a skill's evidence.
+// REST pages are authenticated conditional reads (GitHub REST best practices);
+// revalidate even old pages to detect edited feedback. Linked issues have their
+// own updates, so unchanged PR updated_at is not negative evidence for them.
+// Request cursors are owned separately; thread resolution/line movement is not
+// new feedback (docs/SPECIFICATION.md, Event and run behavior).
+func (c *Client) DiscoveryContext(ctx context.Context, pull Pull) (ReviewContext, error) {
+	return c.context(ctx, pull, false)
+}
+
+func (c *Client) context(ctx context.Context, pull Pull, complete bool) (ReviewContext, error) {
 	canonical, prefix, err := c.repositoryScope(pull.Repository)
 	if err != nil {
 		return ReviewContext{}, err
@@ -157,6 +171,9 @@ func (c *Client) Context(ctx context.Context, pull Pull) (ReviewContext, error) 
 		name, path string
 		target     *[]json.RawMessage
 	}{{"reviews", prefix + "/pulls/" + number + "/reviews", &result.Reviews}, {"inline comments", prefix + "/pulls/" + number + "/comments", &result.Comments}, {"conversation", prefix + "/issues/" + number + "/comments", &result.Conversation}, {"request timeline", prefix + "/issues/" + number + "/timeline", &result.Timeline}} {
+		if !complete && input.name == "request timeline" {
+			continue
+		}
 		items, readErr := c.rawPages(ctx, input.path)
 		if readErr != nil {
 			if fatal := readInterruption(ctx, readErr); fatal != nil {
@@ -169,14 +186,16 @@ func (c *Client) Context(ctx context.Context, pull Pull) (ReviewContext, error) 
 	}
 	parts := strings.Split(canonical, "/")
 	variables := map[string]any{"owner": parts[1], "name": parts[2], "number": pull.Number, "after": nil}
-	threads, readErr := c.readThreads(ctx, pull, variables)
-	if readErr != nil {
-		if fatal := readInterruption(ctx, readErr); fatal != nil {
-			return ReviewContext{}, fatal
+	if complete {
+		threads, readErr := c.readThreads(ctx, pull, variables)
+		if readErr != nil {
+			if fatal := readInterruption(ctx, readErr); fatal != nil {
+				return ReviewContext{}, fatal
+			}
+			result.Gaps = append(result.Gaps, "Complete review-thread state could not be acquired: "+readErr.Error())
+		} else {
+			result.Threads = threads
 		}
-		result.Gaps = append(result.Gaps, "Complete review-thread state could not be acquired: "+readErr.Error())
-	} else {
-		result.Threads = threads
 	}
 	variables["after"] = nil
 	requirements, readErr := c.readRequirements(ctx, pull, variables)

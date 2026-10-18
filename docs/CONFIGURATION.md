@@ -69,3 +69,36 @@ instructions = "Pay particular attention to backwards compatibility."
 `config explain owner/repo` uses the default branch and shows provenance;
 `--offline` explains operator-only settings explicitly. A particular PR may have
 a different target base. Neither command starts an agent.
+
+## File locations and profiles
+
+Configuration selection is `--config` → `REVIEWD_CONFIG` → the OS default.
+An explicit path takes precedence over `--profile`; it still must be a valid
+profile name. `~/` is expanded and relative paths resolve from the current
+directory. Linux `XDG_CONFIG_HOME`, when set, must be absolute.
+
+| Location | macOS | Linux |
+| --- | --- | --- |
+| Default config | `~/Library/Application Support/reviewd/config.toml` | `${XDG_CONFIG_HOME:-~/.config}/reviewd/config.toml` |
+| Named config | `~/Library/Application Support/reviewd/profiles/<name>/config.toml` | `${XDG_CONFIG_HOME:-~/.config}/reviewd/profiles/<name>/config.toml` |
+| State root | `~/Library/Application Support` | `${XDG_STATE_HOME:-~/.local/state}` |
+
+Default profile state is `<state-root>/reviewd/profiles/<id>`, containing
+`reviewd.sqlite` and local scheduler locks (`watch.lock`, `review-admission.lock`,
+`review-slot-NN.lock`). `<id>` is the first eight bytes of SHA-256 of the
+canonical absolute config path, encoded as 16 hexadecimal characters. Symlinks
+and the nearest existing ancestor are resolved even before `init` creates a
+missing file. Editing config contents does not change the state identity;
+moving the file can select a different inbox. `state.directory` overrides this
+profile directory and must be a private directory, not a symlink.
+
+macOS ignores `XDG_STATE_HOME`; Linux rejects a relative value. Shared per-PR
+execution leases live in `<state-root>/reviewd/feedback-modifiers` with ownership
+sidecars. They deliberately remain outside profile/state-directory overrides,
+so separate profiles cannot run overlapping review/feedback skills for one PR.
+Do not delete locks or uncertain history to retry an interrupted skill; inspect
+the recorded session and use the explicit recovery/start commands.
+
+Completed, owner-closed native output expires after `state.retention_days`
+(default 30), including the latest activity preview. Identity and deduplication
+facts remain. Failed/interrupted and uncertain historical output are retained.

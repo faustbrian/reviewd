@@ -39,7 +39,9 @@ instructions and `review --private` are prompt text, not capability controls.
 Feedback identity follows other actors' substantive content, not the handler's
 own replies, its push, automatic review dismissal, line movement or thread
 resolution. Review identity likewise excludes the operator's own feedback, so a
-posted review does not become a self-trigger loop. New head or feedback events
+posted review does not become a self-trigger loop. Linked closing issue identity,
+title and body changes renew review work independently of incoming feedback;
+URL/timestamp-only metadata does not. New head or feedback events
 are coalesced while an agent is running; they do not interrupt its workflow.
 Picking up a job freezes reviewd's operator configuration before GitHub
 preparation, including its skill, model, effort, instructions and total timeout
@@ -67,3 +69,24 @@ Existing historical runs, outcomes, notification receipts and retained work
 remain readable. Their old private-review/feedback-workflow decisions are not
 silently converted into ordinary skill launch permission. See
 [upgrading](UPGRADING.md) for the compatibility change.
+
+## Polling, activity and distribution
+
+Each watcher tick rechecks configured GitHub credentials. Validated conditional
+GET representations survive same-account reconnects in bounded memory, never
+across different hosts/endpoints/credentials. Request history advances from its
+last observed cursor for relevant review work; irrelevant, draft-excluded and
+author-excluded PRs do not require review history. Newly eligible history remains
+a baseline unless an actual new request/code/context event is observed.
+Feedback pages are revalidated even when PR metadata is unchanged, and linked
+requirements are read independently. Discovery does not acquire full resolved
+thread evidence for a skill; that evidence belongs to the skill's workflow.
+
+Native activity is a bounded, redacted latest-status preview visible before a
+turn completes. It carries no additional workflow authority. Pause and snooze
+hold future work/notifications, not publication by an accepted skill.
+
+Version tags drive four native quality/package jobs and complete release asset
+assembly. Development CI artifacts are not published releases. See
+[distribution](DISTRIBUTION.md), [Codex compatibility](CODEX.md), and concrete
+[configuration/state locations](CONFIGURATION.md#file-locations-and-profiles).

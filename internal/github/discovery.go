@@ -157,13 +157,27 @@ type RequestEvent struct {
 
 // RequestEvents returns the complete observed history, not an applicability-filtered view.
 func (c *Client) RequestEvents(ctx context.Context, pull Pull) ([]RequestEvent, error) {
+	events, _, err := c.RequestEventsAfter(ctx, pull, "")
+	return events, err
+}
+
+// RequestEventsAfter drains new immutable request events after the last sampled
+// position. An empty tail retains its cursor. See GitHub GraphQL pagination's
+// pageInfo.endCursor / after contract; do not restart unchanged full histories.
+func (c *Client) RequestEventsAfter(ctx context.Context, pull Pull, after string) ([]RequestEvent, string, error) {
 	canonical, _, err := c.repositoryScope(pull.Repository)
 	if err != nil {
-		return nil, err
+		return nil, after, err
 	}
 	parts := strings.Split(canonical, "/")
 	variables := map[string]any{"owner": parts[1], "name": parts[2], "number": pull.Number, "after": nil}
+	if after != "" {
+		variables["after"] = after
+	}
 	cursors, seen := map[string]bool{}, map[string]bool{}
+	if after != "" {
+		cursors[after] = true
+	}
 	result := []RequestEvent{}
 	for page := 0; page < 200; page++ {
 		var data struct {
@@ -176,11 +190,11 @@ func (c *Client) RequestEvents(ctx context.Context, pull Pull) ([]RequestEvent, 
 			} `json:"repository"`
 		}
 		if err := c.query(ctx, requestEventsQuery, variables, &data); err != nil {
-			return nil, err
+			return nil, after, err
 		}
 		item := data.Repository.Pull
 		if item == nil || item.ID != pull.ID || item.Number != pull.Number || item.Events.Nodes == nil {
-			return nil, errors.New("request-event scope or completeness changed")
+			return nil, after, errors.New("request-event scope or completeness changed")
 		}
 		for _, raw := range *item.Events.Nodes {
 			var event struct {
@@ -192,7 +206,7 @@ func (c *Client) RequestEvents(ctx context.Context, pull Pull) ([]RequestEvent, 
 				} `json:"requestedReviewer"`
 			}
 			if json.Unmarshal(raw, &event) != nil || event.ID == "" || event.Created.IsZero() || seen[event.ID] {
-				return nil, errors.New("request-event identity is incomplete or repeated")
+				return nil, after, errors.New("request-event identity is incomplete or repeated")
 			}
 			seen[event.ID] = true
 			if event.Reviewer == nil {
@@ -200,19 +214,23 @@ func (c *Client) RequestEvents(ctx context.Context, pull Pull) ([]RequestEvent, 
 				continue
 			}
 			if event.Reviewer.ID <= 0 || (event.Reviewer.Kind != "User" && event.Reviewer.Kind != "Team") {
-				return nil, errors.New("requested event reviewer identity is unsupported")
+				return nil, after, errors.New("requested event reviewer identity is unsupported")
 			}
 			result = append(result, RequestEvent{ID: event.ID, ReviewerKind: event.Reviewer.Kind, ReviewerID: event.Reviewer.ID})
 		}
 		cursor, more, err := advance(item.Events.PageInfo, cursors)
 		if err != nil {
-			return nil, err
+			return nil, after, err
 		}
 		if !more {
 			sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
-			return result, nil
+			if item.Events.PageInfo.EndCursor != nil && *item.Events.PageInfo.EndCursor != "" {
+				after = *item.Events.PageInfo.EndCursor
+			}
+			return result, after, nil
 		}
 		variables["after"] = cursor
+		after = cursor
 	}
-	return nil, errors.New("request-event pagination exceeded its explicit bound")
+	return nil, after, errors.New("request-event pagination exceeded its explicit bound")
 }

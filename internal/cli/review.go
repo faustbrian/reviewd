@@ -104,6 +104,9 @@ func (e *execution) presentRun(output io.Writer, run store.Run) error {
 	if run.RequestedModel != "" {
 		fmt.Fprintf(output, "Requested model: %s\n", terminalText(run.RequestedModel))
 	}
+	if run.Progress != "" {
+		fmt.Fprintf(output, "Activity: %s\n", terminalText(run.Progress))
+	}
 	if run.CancellationRequested && run.State == store.AgentRunning {
 		fmt.Fprintln(output, "Cancellation requested; waiting for the agent to stop.")
 	}

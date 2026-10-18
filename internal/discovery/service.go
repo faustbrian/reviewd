@@ -23,22 +23,25 @@ type Service struct {
 	Store   *store.Store
 }
 type captured struct {
-	EventContextKey  string                `json:"event_context_key,omitempty"`
-	FeedbackSchema   int                   `json:"feedback_schema,omitempty"`
-	FeedbackEligible bool                  `json:"feedback_eligible,omitempty"`
-	FeedbackDigest   string                `json:"feedback_digest,omitempty"`
-	FeedbackReviews  string                `json:"feedback_reviews,omitempty"`
-	Following        bool                  `json:"following"`
-	Requested        bool                  `json:"requested"`
-	Pull             github.DiscoveredPull `json:"pull"`
-	Owed             bool                  `json:"owed"`
-	Own              bool                  `json:"own"`
-	Eligible         bool                  `json:"eligible"`
-	Requests         []string              `json:"requests"`
-	RelevantRequests []string              `json:"relevant_requests"`
-	Context          github.ReviewContext  `json:"context"`
-	Reviews          string                `json:"reviews"`
-	Comments         string                `json:"comments"`
+	RequirementsRevision string                `json:"requirements_revision,omitempty"`
+	RequestCursor        string                `json:"request_cursor,omitempty"`
+	RequestsTracked      *bool                 `json:"requests_tracked,omitempty"`
+	EventContextKey      string                `json:"event_context_key,omitempty"`
+	FeedbackSchema       int                   `json:"feedback_schema,omitempty"`
+	FeedbackEligible     bool                  `json:"feedback_eligible,omitempty"`
+	FeedbackDigest       string                `json:"feedback_digest,omitempty"`
+	FeedbackReviews      string                `json:"feedback_reviews,omitempty"`
+	Following            bool                  `json:"following"`
+	Requested            bool                  `json:"requested"`
+	Pull                 github.DiscoveredPull `json:"pull"`
+	Owed                 bool                  `json:"owed"`
+	Own                  bool                  `json:"own"`
+	Eligible             bool                  `json:"eligible"`
+	Requests             []string              `json:"requests"`
+	RelevantRequests     []string              `json:"relevant_requests"`
+	Context              github.ReviewContext  `json:"context"`
+	Reviews              string                `json:"reviews"`
+	Comments             string                `json:"comments"`
 }
 
 func key(value any) string {
@@ -196,7 +199,7 @@ func (s Service) syncRepository(ctx context.Context, document *config.Document, 
 	checked := map[string]bool{}
 	if policy.Bool("github.watch_review_requests") {
 		for _, pull := range pulls {
-			if pull.Draft && !policy.Bool("watch.include_drafts") {
+			if (pull.Draft && !policy.Bool("watch.include_drafts")) || policy.ReviewAuthorExcluded(pull.Author.ID, pull.Author.Login, actor.ID) {
 				continue
 			}
 			for _, team := range pull.RequestedTeams {
@@ -242,18 +245,27 @@ func (s Service) syncRepository(ctx context.Context, document *config.Document, 
 		if excludedReview {
 			current.Owed = false
 		}
-		relevant := current.Eligible && (current.Owed || current.Own || current.FeedbackEligible || policy.String("actions.new_pull_request") != "ignore")
+		relevant := current.Eligible && (current.Own || current.FeedbackEligible || (!excludedReview && (current.Owed || policy.String("actions.new_pull_request") != "ignore")))
 		var old captured
 		if previous[pull.ID].Record != nil && json.Unmarshal(previous[pull.ID].Record, &old) != nil {
 			return errors.New("stored discovery observation is invalid")
 		}
 		current.Requests = append([]string{}, old.Requests...)
 		current.RelevantRequests = append([]string{}, old.RelevantRequests...)
-		if pull.State == "open" {
-			events, err := s.GitHub.RequestEvents(ctx, pull.Pull)
+		current.RequirementsRevision = old.RequirementsRevision
+		current.RequestCursor = old.RequestCursor
+		sampled := current.Eligible && !excludedReview && policy.Bool("github.watch_review_requests") && (current.Owed || old.Requested || old.Following || policy.String("actions.new_pull_request") != "ignore")
+		current.RequestsTracked = &sampled
+		if sampled {
+			events, cursor, err := s.GitHub.RequestEventsAfter(ctx, pull.Pull, old.RequestCursor)
 			if err != nil {
 				return err
 			}
+			current.RequestCursor = cursor
+			// Older observations sampled every open PR. A newly sampled history after
+			// an eligibility/policy gap is a baseline unless the PR list itself shows
+			// a newly added request. Membership alone must not revive old requests.
+			allowRequest := old.RequestsTracked == nil || *old.RequestsTracked || addedRequest(pull, old.Pull, actor.ID, teams)
 			// Keep all observed IDs, but advance review-event identity only when a
 			// newly observed request is applicable now. Membership changes cannot
 			// manufacture a new event from already observed historical evidence.
@@ -271,7 +283,7 @@ func (s Service) syncRepository(ctx context.Context, document *config.Document, 
 				}
 				current.Requests = append(current.Requests, event.ID)
 				known[event.ID] = true
-				if policy.Bool("github.watch_review_requests") && ((event.ReviewerKind == "User" && event.ReviewerID == actor.ID) || (event.ReviewerKind == "Team" && applicableTeams[event.ReviewerID])) {
+				if allowRequest && policy.Bool("github.watch_review_requests") && ((event.ReviewerKind == "User" && event.ReviewerID == actor.ID) || (event.ReviewerKind == "Team" && applicableTeams[event.ReviewerID])) {
 					current.RelevantRequests = append(current.RelevantRequests, event.ID)
 				}
 			}
@@ -281,7 +293,7 @@ func (s Service) syncRepository(ctx context.Context, document *config.Document, 
 		}
 		var inventory feedbacklane.Inventory
 		if relevant {
-			current.Context, err = s.GitHub.Context(ctx, pull.Pull)
+			current.Context, err = s.GitHub.DiscoveryContext(ctx, pull.Pull)
 			if err != nil {
 				return err
 			}
@@ -319,8 +331,15 @@ func (s Service) syncRepository(ctx context.Context, document *config.Document, 
 			}
 
 		}
+		// Preserve old work identities on adoption. Only a semantic transition
+		// of already acquired requirements adds a revision; A->B->A is fresh work,
+		// not an automatic replay of a previously consumed event.
+		requirementsChanged := relevant && old.EventContextKey != "" && requirementKey(old.Context.Requirements) != requirementKey(current.Context.Requirements)
+		if requirementsChanged {
+			current.RequirementsRevision = key([]string{old.RequirementsRevision, requirementKey(current.Context.Requirements)})
+		}
 		headChanged := old.Pull.ID != 0 && old.Pull.HeadSHA != pull.HeadSHA
-		contextChanged := old.Pull.ID != 0 && (old.Pull.TargetBaseSHA != pull.TargetBaseSHA || old.Pull.Title != pull.Title || old.Pull.Body != pull.Body || (old.EventContextKey != "" && current.EventContextKey != "" && old.EventContextKey != current.EventContextKey))
+		contextChanged := old.Pull.ID != 0 && (requirementsChanged || old.Pull.TargetBaseSHA != pull.TargetBaseSHA || old.Pull.Title != pull.Title || old.Pull.Body != pull.Body || (old.EventContextKey != "" && current.EventContextKey != "" && old.EventContextKey != current.EventContextKey))
 		raw, _ := json.Marshal(current)
 		rows = append(rows, store.Observation{PullID: pull.ID, Number: pull.Number, HeadSHA: pull.HeadSHA, Record: raw, MaterialChange: headChanged || contextChanged})
 		// Existing private-review consent keeps its original category and scope;
@@ -350,7 +369,13 @@ func (s Service) syncRepository(ctx context.Context, document *config.Document, 
 		// Becoming eligible is not a new event. Existing first-action work stays
 		// held unless a real request, code or acquired controlling context changed.
 		eventBaseline := baseline || (old.Pull.ID != 0 && !newExplicit && !headChanged && !contextChanged)
-		workEvent := key([]any{pull.HeadSHA, pull.TargetBaseSHA, pull.Title, pull.Body, current.RelevantRequests, current.EventContextKey})
+		eventInputs := []any{pull.HeadSHA, pull.TargetBaseSHA, pull.Title, pull.Body, current.RelevantRequests, current.EventContextKey}
+		reviewContext := current.EventContextKey
+		if current.RequirementsRevision != "" {
+			eventInputs = append(eventInputs, current.RequirementsRevision)
+			reviewContext = key([]string{reviewContext, current.RequirementsRevision})
+		}
+		workEvent := key(eventInputs)
 		updateAction := func(trigger, action string) (string, string) {
 			if newExplicit {
 				return "review_requested", policy.String("actions.review_requested")
@@ -404,7 +429,7 @@ func (s Service) syncRepository(ctx context.Context, document *config.Document, 
 			if itemBaseline && action == "auto" {
 				explanation += " Existing backlog is held until an explicit start decision."
 			}
-			return store.InboxItem{Repository: scope.Repository, PullID: pull.ID, Number: pull.Number, ActorID: actor.ID, Category: category, Trigger: trigger, Action: action, State: state, Baseline: itemBaseline, EventKey: event, HeadSHA: pull.HeadSHA, TargetBaseSHA: pull.TargetBaseSHA, ContextKey: current.EventContextKey, Title: pull.Title, URL: pull.URL, Explanation: explanation}
+			return store.InboxItem{Repository: scope.Repository, PullID: pull.ID, Number: pull.Number, ActorID: actor.ID, Category: category, Trigger: trigger, Action: action, State: state, Baseline: itemBaseline, EventKey: event, HeadSHA: pull.HeadSHA, TargetBaseSHA: pull.TargetBaseSHA, ContextKey: reviewContext, Title: pull.Title, URL: pull.URL, Explanation: explanation}
 		}
 
 		if current.Owed {
@@ -478,6 +503,53 @@ func newRequest(current, previous []string) bool {
 	}
 	for _, id := range current {
 		if !seen[id] {
+			return true
+		}
+	}
+	return false
+}
+
+// Only identity and controlling prose are requirements. URLs and update times
+// are metadata and must not manufacture reviews (docs/SPECIFICATION.md).
+func requirementKey(raw []json.RawMessage) string {
+	type requirement struct {
+		ID         string `json:"id"`
+		DatabaseID int64  `json:"databaseId"`
+		Title      string `json:"title"`
+		Body       string `json:"body"`
+	}
+	values := []requirement{}
+	for _, data := range raw {
+		var value requirement
+		_ = json.Unmarshal(data, &value)
+		values = append(values, value)
+	}
+	sort.Slice(values, func(i, j int) bool { return values[i].ID < values[j].ID })
+	return key(values)
+}
+
+func addedRequest(current, previous github.DiscoveredPull, actor int64, teams map[int64]bool) bool {
+	for _, user := range current.RequestedUsers {
+		if user.ID != actor {
+			continue
+		}
+		found := false
+		for _, old := range previous.RequestedUsers {
+			found = found || old.ID == actor
+		}
+		if !found {
+			return true
+		}
+	}
+	for _, team := range current.RequestedTeams {
+		if !teams[team.ID] {
+			continue
+		}
+		found := false
+		for _, old := range previous.RequestedTeams {
+			found = found || old.ID == team.ID
+		}
+		if !found {
 			return true
 		}
 	}

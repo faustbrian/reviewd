@@ -125,3 +125,70 @@ func TestConditionalDiscoveryNeverMasksFailureOrChangesPublicationReader(t *test
 		})
 	}
 }
+
+func TestDiscoveryReconnectScopesValidatorsAndUsesCurrentTransport(t *testing.T) {
+	ctx := context.Background()
+	var validators []bool
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		validators = append(validators, r.Header.Get("If-None-Match") != "")
+		w.Header().Set("ETag", `"owned-identity"`)
+		if r.Header.Get("If-None-Match") == `"owned-identity"` {
+			w.WriteHeader(304)
+			return
+		}
+		json.NewEncoder(w).Encode(Identity{ID: 43, Login: "reviewer"})
+	}))
+	defer peer.Close()
+	connect := func(token string, previous *Client, transport http.RoundTripper) *Client {
+		t.Helper()
+		client, err := New(Options{Host: "github.com", BaseURL: peer.URL, Token: token, HTTPClient: &http.Client{Transport: transport}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.ReuseDiscoveryCache(previous)
+		if _, err := client.DiscoveryReader().Identity(ctx); err != nil {
+			t.Fatal(err)
+		}
+		return client
+	}
+	first := connect("first-account", nil, nil)
+	transportCalls := 0
+	second := connect("first-account", first, roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		transportCalls++
+		return http.DefaultTransport.RoundTrip(r)
+	}))
+	connect("second-account", second, nil)
+	if len(validators) != 3 || validators[0] || !validators[1] || validators[2] || transportCalls != 1 {
+		t.Fatalf("cache escaped account/transport scope: validators=%v current transport calls=%d", validators, transportCalls)
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestNoStoreRepresentationIsNotInheritedByReconnect(t *testing.T) {
+	var conditional bool
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conditional = conditional || r.Header.Get("If-None-Match") != ""
+		w.Header().Set("ETag", `"private-identity"`)
+		w.Header().Set("Cache-Control", "no-store")
+		json.NewEncoder(w).Encode(Identity{ID: 43, Login: "reviewer"})
+	}))
+	defer peer.Close()
+	var previous *Client
+	for i := 0; i < 2; i++ {
+		client, err := New(Options{Host: "github.com", BaseURL: peer.URL, Token: "owned-fixture"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.ReuseDiscoveryCache(previous)
+		if _, err := client.DiscoveryReader().Identity(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		previous = client
+	}
+	if conditional {
+		t.Fatal("no-store representation survived a client reconnect")
+	}
+}

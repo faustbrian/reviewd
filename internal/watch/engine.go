@@ -73,6 +73,9 @@ func (e *Engine) Tick(ctx context.Context) (resultErr error) {
 	connect := func(ctx context.Context, host string) (*github.Client, error) {
 		var err error
 		client, err = e.Connect(ctx, host)
+		if err == nil && client != nil {
+			client.ReuseDiscoveryCache(e.client)
+		}
 		return client, err
 	}
 	// Discovery controls admission, not accepted skills. The user's selected

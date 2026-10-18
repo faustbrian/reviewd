@@ -227,7 +227,7 @@ func (s Service) Run(ctx context.Context, document *config.Document, job Job) (r
 			if progress.ThreadID == "" {
 				return nil
 			}
-			return s.Store.RecordAgent(ctx, run.ID, progress.ThreadID, policy.String(prefix+"model"), progress.Usage)
+			return s.Store.RecordAgent(ctx, run.ID, progress.ThreadID, policy.String(prefix+"model"), progress.Usage, progress.Activity)
 		}})
 		err = errors.Join(err, stop())
 	} else {
@@ -236,7 +236,7 @@ func (s Service) Run(ctx context.Context, document *config.Document, job Job) (r
 	save, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer done()
 	if output.ThreadID != "" {
-		err = errors.Join(err, s.Store.RecordAgent(save, run.ID, output.ThreadID, policy.String(prefix+"model"), output.Usage))
+		err = errors.Join(err, s.Store.RecordAgent(save, run.ID, output.ThreadID, policy.String(prefix+"model"), output.Usage, output.Activity))
 	}
 	cleanupErr := owner.Close()
 	err = errors.Join(err, cleanupErr)

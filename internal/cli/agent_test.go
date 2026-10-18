@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/faustbrian/reviewd/internal/agent"
+	"github.com/faustbrian/reviewd/internal/config"
 	"github.com/faustbrian/reviewd/internal/github"
 	"github.com/faustbrian/reviewd/internal/store"
 )
@@ -65,6 +66,60 @@ func TestOrdinarySkillCommandsLaunchAndShowWithoutWorkflowOwnership(t *testing.T
 				}
 				if r.Skill != want || r.URL != "https://github.com/owner/repo/pull/17" || r.Model != "gpt-6.1-sol" || r.Effort != "high" || r.Instructions != "" {
 					t.Fatalf("ordinary skill launch changed: %+v", r)
+				}
+				var progress agent.Output
+				if err := json.Unmarshal([]byte(`{"thread_id":"session-`+name+`","activity":"Reading current review feedback"}`), &progress); err != nil {
+					t.Fatal(err)
+				}
+				if err := r.OnProgress(progress); err != nil {
+					t.Fatal(err)
+				}
+				reader, err := store.OpenExisting(ctx, filepath.Join(root, "profile"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				runs, err := reader.List(ctx)
+				data, readErr := os.ReadFile(path)
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				document, parseErr := config.Parse(data, path)
+				if parseErr != nil {
+					t.Fatal(parseErr)
+				}
+				snapshot, snapshotErr := (&execution{}).terminalSnapshot(ctx, reader, document)
+				reader.Close()
+				if snapshotErr != nil {
+					t.Fatal(snapshotErr)
+				}
+				visible := false
+				for _, entry := range snapshot.Entries {
+					visible = visible || strings.Contains(entry.Details, "Reading current review feedback")
+				}
+				if !visible {
+					t.Fatal("live TUI details lack activity")
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				var active store.Run
+				for _, run := range runs {
+					if run.State == store.AgentRunning {
+						active = run
+					}
+				}
+				if active.ID == "" || active.Progress != "Reading current review feedback" || active.ThreadID != progress.ThreadID {
+					t.Fatalf("live activity not durable for second reader: %+v", active)
+				}
+				for _, asJSON := range []bool{false, true} {
+					var live, diagnostics bytes.Buffer
+					args := []string{"--config", path, "show", active.ID}
+					if asJSON {
+						args = append(args, "--json")
+					}
+					if code := Run(ctx, args, &live, &diagnostics, Dependencies{}); code != 0 || !strings.Contains(live.String(), "Reading current review feedback") {
+						t.Fatalf("live show missing activity: %d %s %s", code, live.String(), diagnostics.String())
+					}
 				}
 				return agent.Output{ThreadID: "session-" + name, Completed: true, Text: "Skill finished using its own workflow."}, nil
 			}}

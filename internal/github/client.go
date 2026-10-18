@@ -30,12 +30,13 @@ type Options struct {
 	HTTPClient *http.Client
 }
 type Client struct {
-	host          string
-	endpoint      *url.URL
-	token         string
-	http          *http.Client
-	discoveryOnce sync.Once
-	discoveryHTTP *http.Client
+	host           string
+	endpoint       *url.URL
+	token          string
+	http           *http.Client
+	discoveryOnce  sync.Once
+	discoveryHTTP  *http.Client
+	discoveryCache *conditionalCache
 }
 type Identity struct {
 	ID    int64  `json:"id"`

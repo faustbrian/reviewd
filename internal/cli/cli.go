@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/faustbrian/reviewd/internal/activity"
 	"github.com/faustbrian/reviewd/internal/agent"
 	"github.com/faustbrian/reviewd/internal/config"
 	"github.com/faustbrian/reviewd/internal/github"
@@ -406,6 +407,5 @@ func canonicalLocation(path string) (string, error) {
 }
 
 var profilePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
-var secretPattern = regexp.MustCompile(`sk-(?:proj-)?[A-Za-z0-9_-]{20,}|gh[opusr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}`)
 
-func redact(text string) string { return secretPattern.ReplaceAllString(text, "<redacted>") }
+func redact(text string) string { return activity.Redact(text) }

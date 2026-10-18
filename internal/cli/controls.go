@@ -34,7 +34,7 @@ func (e *execution) controlStore(command *cobra.Command) (*store.Store, config.S
 func (e *execution) projectPauseCommand(paused bool) *cobra.Command {
 	name, description := "resume", "Resume a project under its existing policy and decisions"
 	if paused {
-		name, description = "pause", "Pause scheduled work, automatic publication and notifications for a project"
+		name, description = "pause", "Hold future agent starts and notifications; running skills continue"
 	}
 	command := &cobra.Command{Use: name + " <owner/repo>", Short: description, Args: cobra.ExactArgs(1)}
 	command.RunE = func(command *cobra.Command, args []string) error {
@@ -67,7 +67,7 @@ func (e *execution) projectPauseCommand(paused bool) *cobra.Command {
 func (e *execution) snoozeCommand() *cobra.Command {
 	var duration time.Duration
 	var untilHead bool
-	command := &cobra.Command{Use: "snooze <item-id>", Short: "Hold one inbox category without losing its decisions or prepared review", Args: cobra.ExactArgs(1)}
+	command := &cobra.Command{Use: "snooze <item-id>", Short: "Hold one inbox category without losing its decision or history", Args: cobra.ExactArgs(1)}
 	command.Flags().DurationVar(&duration, "for", 0, "Snooze for a positive duration, such as 2h")
 	command.Flags().BoolVar(&untilHead, "until-head", false, "Snooze until the PR head changes; same-head re-requests do not wake it")
 	command.RunE = func(command *cobra.Command, args []string) error {

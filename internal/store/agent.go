@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/faustbrian/reviewd/internal/activity"
 )
 
 // ClaimAgent cannot reinterpret a historical private-review or feedback broker
@@ -20,7 +21,7 @@ func (s *Store) ClaimAgent(ctx context.Context, id string) (bool, error) {
 	return count == 1, err
 }
 
-func (s *Store) RecordAgent(ctx context.Context, id, thread, model string, usage json.RawMessage) error {
+func (s *Store) RecordAgent(ctx context.Context, id, thread, model string, usage json.RawMessage, preview ...string) error {
 	if !executionIdentifier(thread) || !executionIdentifier(model) {
 		return errors.New("normal agent progress requires session and requested model identity")
 	}
@@ -30,10 +31,15 @@ func (s *Store) RecordAgent(ctx context.Context, id, thread, model string, usage
 	if !json.Valid(usage) {
 		return errors.New("normal agent usage is invalid JSON")
 	}
+	text := ""
+	if len(preview) > 0 {
+		text = activity.Clean(preview[0])
+	}
 	result, err := s.db.ExecContext(ctx, `UPDATE runs SET thread_id=?,
- record=json_set(record,'$.requested_model',?,'$.usage',json(?)),updated_at=?
+ record=json_set(record,'$.requested_model',?,'$.usage',json(?),
+ '$.progress',CASE WHEN ?='' THEN COALESCE(json_extract(record,'$.progress'),'') ELSE ? END),updated_at=?
  WHERE id=? AND state='running' AND json_extract(record,'$.executor')=?
- AND (COALESCE(thread_id,'')='' OR thread_id=?)`, thread, model, string(usage), timestamp(), id, NativeExecutor, thread)
+ AND (COALESCE(thread_id,'')='' OR thread_id=?)`, thread, model, string(usage), text, text, timestamp(), id, NativeExecutor, thread)
 	return changed(result, err, "could not record normal agent progress")
 }
 

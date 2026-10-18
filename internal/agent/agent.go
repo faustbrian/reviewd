@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/faustbrian/reviewd/internal/activity"
 	"github.com/faustbrian/reviewd/internal/lifetime"
 )
 
@@ -23,6 +24,7 @@ type Request struct {
 type Output struct {
 	ThreadID   string          `json:"thread_id,omitempty"`
 	Text       string          `json:"text,omitempty"`
+	Activity   string          `json:"activity,omitempty"`
 	Completed  bool            `json:"completed"`
 	Diagnostic string          `json:"diagnostic,omitempty"`
 	Usage      json.RawMessage `json:"usage,omitempty"`
@@ -183,9 +185,21 @@ func (s *events) consume(data []byte) {
 			return
 		}
 		s.output.ThreadID = event.ThreadID
-	case "item.completed":
+	case "item.started", "item.updated", "item.completed":
 		if event.Item.Type == "agent_message" {
-			s.output.Text = event.Item.Text
+			s.output.Activity = activity.Clean(event.Item.Text)
+			if event.Type == "item.completed" {
+				s.output.Text = event.Item.Text
+			}
+		} else {
+			switch event.Item.Type {
+			case "command_execution", "mcp_tool_call", "web_search", "file_change", "reasoning", "todo_list", "collab_tool_call", "error":
+				// Native kinds: openai/codex rust-v0.163.0, exec/src/exec_events.rs
+				// ThreadItemDetails (serde snake_case).
+				// Tool arguments, command lines and results may contain credentials.
+				// Report only the native item kind/phase, not their raw payloads.
+				s.output.Activity = activity.Clean(event.Item.Type + " " + strings.TrimPrefix(event.Type, "item."))
+			}
 		}
 	case "turn.completed":
 		s.output.Completed = true
@@ -207,7 +221,7 @@ func (s *events) consume(data []byte) {
 		s.fail(fmt.Errorf("Codex reported %s; inspect the session for details", event.Type))
 		return
 	default:
-		// Native tool/agent activity belongs to Codex, not reviewd's workflow.
+		// Unknown events neither change activity nor certify execution/delivery.
 	}
 	if s.progress != nil {
 		status := s.output

@@ -180,8 +180,18 @@ env_vars=["REVIEWD_NATIVE_MCP_SENTINEL"]
 	for _, skill := range []string{"review", "handle-pr-feedback"} {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		var diagnostic strings.Builder
-		output, err := Run(ctx, Request{Executable: executable, Directory: workspace, Skill: skill, URL: "https://github.com/fixture/fixture/pull/1", Model: "gpt-6.1-sol", Effort: "high", Diagnostics: &diagnostic})
+		seenActivity, seenTool := false, false
+		output, err := Run(ctx, Request{Executable: executable, Directory: workspace, Skill: skill, URL: "https://github.com/fixture/fixture/pull/1", Model: "gpt-6.1-sol", Effort: "high", Diagnostics: &diagnostic, OnProgress: func(progress Output) error {
+			if !progress.Completed && progress.Activity != "" {
+				seenActivity = true
+				seenTool = seenTool || strings.Contains(progress.Activity, "mcp_tool_call") || strings.Contains(progress.Activity, "command_execution")
+			}
+			return nil
+		}})
 		cancel()
+		if !seenActivity || !seenTool {
+			t.Fatalf("installed Codex did not expose running tool activity: activity=%t tool=%t", seenActivity, seenTool)
+		}
 		if nativeSessions[output.ThreadID] {
 			t.Fatal("skill launch resumed a previous session instead of starting fresh")
 		}

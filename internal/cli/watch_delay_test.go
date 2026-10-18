@@ -55,8 +55,10 @@ func TestWatchPollingHonorsEveryRepositoryRetryDeadline(t *testing.T) {
 	}
 }
 
-func TestWatchContextRateLimitPreservesServerRetryDeadline(t *testing.T) {
-	for _, endpoint := range []string{"reviews", "reviewThreads", "closingIssuesReferences"} {
+func TestWatchDiscoveryRateLimitPreservesServerRetryDeadline(t *testing.T) {
+	// Discovery reads request events and closing requirements, not resolved
+	// thread history. Both remaining GraphQL trigger reads must retain backoff.
+	for _, endpoint := range []string{"reviews", "timelineItems", "closingIssuesReferences"} {
 		t.Run(endpoint, func(t *testing.T) {
 			limited := false
 			_, path, deps := lifecycleCLIConfigDeps(t, "ignore", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

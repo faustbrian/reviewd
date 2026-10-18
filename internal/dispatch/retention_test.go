@@ -37,10 +37,10 @@ func TestNativeRetentionKeepsWorkIdentityAndUncertainHistory(t *testing.T) {
 		if won, err := s.ClaimAgent(ctx, run.ID); err != nil || !won {
 			t.Fatal("claim", err)
 		}
-		if err := s.RecordAgent(ctx, run.ID, "session-"+string(state), "chosen-model", nil); err != nil {
+		if err := s.RecordAgent(ctx, run.ID, "session-"+string(state), "chosen-model", nil, "private-progress-canary"); err != nil {
 			t.Fatal(err)
 		}
-		outcome, _ := json.Marshal(agent.Output{ThreadID: "session-" + string(state), Completed: state == store.AgentCompleted, Text: "private-output-canary"})
+		outcome, _ := json.Marshal(agent.Output{ThreadID: "session-" + string(state), Completed: state == store.AgentCompleted, Text: "private-output-canary", Activity: "private-progress-canary"})
 		if err := s.FinishAgent(ctx, run.ID, state, outcome, ""); err != nil {
 			t.Fatal(err)
 		}
@@ -65,11 +65,14 @@ func TestNativeRetentionKeepsWorkIdentityAndUncertainHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(done)
+	if strings.Contains(string(raw), "private-progress-canary") {
+		t.Fatal("expired live activity remained in history")
+	}
 	if done.State != store.AgentCompleted || done.ThreadID != "session-completed" || done.WorkKey != completed.WorkKey || done.Archive == nil || strings.Contains(string(raw), "private-output-canary") || strings.Contains(string(raw), "private-instruction-canary") {
 		t.Fatalf("expiry lost identity or retained private text: %s", raw)
 	}
 	pending, err := s.Get(ctx, uncertain.ID)
-	if err != nil || pending.Archive != nil || !strings.Contains(string(pending.Outcome), "private-output-canary") {
+	if err != nil || pending.Archive != nil || !strings.Contains(string(pending.Outcome), "private-output-canary") || pending.Progress != "private-progress-canary" {
 		t.Fatal("uncertain execution history was discarded", err)
 	}
 }

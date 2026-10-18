@@ -50,7 +50,7 @@ func ExpireHistory(ctx context.Context, s *store.Store, days int, dry bool, now 
 		if dry {
 			continue
 		}
-		output.Text, output.Diagnostic = "", ""
+		output.Text, output.Diagnostic, output.Activity = "", "", ""
 		compact, err := json.Marshal(output)
 		if err != nil {
 			return report, err

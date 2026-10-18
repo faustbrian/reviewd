@@ -18,7 +18,9 @@ sandbox, specialist workflow or external delivery policy.
 
 Install `gh` and Codex CLI, authenticate both normally, and install your chosen
 review and feedback skills. Build with Go 1.26 or use a native package produced
-by this repository's CI. Supported targets are macOS/Linux, amd64/arm64.
+by this repository's CI. Supported targets are macOS/Linux, amd64/arm64. See
+[archive installation](docs/DISTRIBUTION.md) and
+[tested Codex capabilities](docs/CODEX.md).
 
 ```sh
 go install github.com/faustbrian/reviewd/cmd/reviewd@main
@@ -66,4 +68,5 @@ explicit cancellation, their timeout or watcher shutdown to stop them.
 - [Current specification](docs/SPECIFICATION.md)
 - [Architecture and checks](docs/IMPLEMENTATION.md)
 - [Packaging](docs/DISTRIBUTION.md)
+- [Codex compatibility](docs/CODEX.md)
 - [Upgrade and already-pushed scope correction](docs/UPGRADING.md)

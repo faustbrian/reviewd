@@ -15,7 +15,10 @@ type cachedRepresentation struct {
 	body   []byte
 }
 type conditionalTransport struct {
-	base    http.RoundTripper
+	base http.RoundTripper
+	*conditionalCache
+}
+type conditionalCache struct {
 	mu      sync.Mutex
 	entries map[string]cachedRepresentation
 	size    int
@@ -25,16 +28,29 @@ type conditionalTransport struct {
 // immutable credentials. Every reuse requires a fresh authenticated 304.
 // Publication clients and their preflight/readback methods are unchanged.
 func (c *Client) DiscoveryReader() *Client {
+	c.ReuseDiscoveryCache(nil)
+	return &Client{host: c.host, endpoint: c.endpoint, token: c.token, http: c.discoveryHTTP}
+}
+
+// ReuseDiscoveryCache retains only validated GET representations across watcher
+// reconnects. Fresh credentials and the new client's transport are still used;
+// host, endpoint or credential changes cannot inherit another account's cache.
+func (c *Client) ReuseDiscoveryCache(previous *Client) {
 	c.discoveryOnce.Do(func() {
+		cache := &conditionalCache{entries: map[string]cachedRepresentation{}}
+		if previous != nil && c.host == previous.host && c.endpoint.String() == previous.endpoint.String() && c.token == previous.token {
+			previous.ReuseDiscoveryCache(nil)
+			cache = previous.discoveryCache
+		}
 		copy := *c.http
 		transport := copy.Transport
 		if transport == nil {
 			transport = http.DefaultTransport
 		}
-		copy.Transport = &conditionalTransport{base: transport, entries: map[string]cachedRepresentation{}}
+		copy.Transport = &conditionalTransport{base: transport, conditionalCache: cache}
+		c.discoveryCache = cache
 		c.discoveryHTTP = &copy
 	})
-	return &Client{host: c.host, endpoint: c.endpoint, token: c.token, http: c.discoveryHTTP}
 }
 func (t *conditionalTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	if request.Method != http.MethodGet {
