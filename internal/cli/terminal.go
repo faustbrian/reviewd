@@ -87,7 +87,7 @@ func (e *execution) terminalSnapshot(ctx context.Context, durable *store.Store, 
 		return terminal.Snapshot{}, err
 	}
 	occupied, capacityErr := watch.OccupiedSlots(durable.Directory())
-	result := terminal.Snapshot{Status: "Cached inbox. Completed means native execution finished, not verified delivery.", Capacity: int(defaults.Int("limits.max_concurrent_reviews")), Occupied: occupied, CapacityKnown: capacityErr == nil, RefreshedAt: now}
+	result := terminal.Snapshot{Status: terminal.CachedInboxStatus, Capacity: int(defaults.Int("limits.max_concurrent_reviews")), Occupied: occupied, CapacityKnown: capacityErr == nil, RefreshedAt: now}
 	scopeByRepo := map[string]store.DiscoveryScope{}
 	complete, pending, failed := 0, 0, 0
 	var discoveryDetails strings.Builder

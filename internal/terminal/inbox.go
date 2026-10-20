@@ -42,6 +42,9 @@ type Snapshot struct {
 	RefreshedAt        time.Time
 }
 
+// CachedInboxStatus is the static explanation, not an operational diagnostic.
+const CachedInboxStatus = "Cached inbox. Completed means native execution finished, not verified delivery."
+
 type Action struct {
 	Kind, Model, Effort, Duration string
 	Entry                         Entry
@@ -157,7 +160,8 @@ type model struct {
 
 func (m *model) Init() tea.Cmd {
 	m.ensureSearch()
-	return tea.Batch(nextTick(), tea.RequestBackgroundColor)
+	m.focus = 1
+	return tea.Batch(nextTick(), tea.RequestBackgroundColor, m.search.Focus())
 }
 func nextTick() tea.Cmd { return tea.Tick(time.Second, func(time.Time) tea.Msg { return tick{} }) }
 
@@ -223,8 +227,8 @@ func (m *model) ensureSearch() {
 		return
 	}
 	m.search = textinput.New()
-	m.search.Prompt = "Search › "
-	m.search.Placeholder = "repository, author, PR, title, activity"
+	m.search.Prompt = ""
+	m.search.Placeholder = "Type to search"
 	m.search.CharLimit = 256
 	m.search.SetWidth(max(1, m.width-11))
 	m.searchReady = true
@@ -361,6 +365,10 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if key == "ctrl+v" {
+			m.full = !m.full
+			return m, nil
+		}
 		m.ensureSearch()
 		if m.focus == 1 {
 			old, _ := m.selected()
@@ -375,9 +383,12 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			case "shift+tab":
 				m.focus = 0
 				m.search.Blur()
-			case "enter", "down":
+			case "enter":
 				m.focus = 0
 				m.search.Blur()
+			case "up", "down", "pgup", "pgdown", "home", "end":
+				m.browse(key)
+				return m, nil
 			case "ctrl+u":
 				m.search.SetValue("")
 			default:
@@ -421,8 +432,6 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.search.Focus()
 		case "shift+tab":
 			m.focus = 3
-		case "ctrl+v":
-			m.full = !m.full
 		case "t":
 			old, _ := m.selected()
 			m.sortRecent = !m.sortRecent
@@ -446,23 +455,10 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.keepSelection(old.Key)
 			m.offset = 0
 		case "up", "k", "down", "j", "pgdown", "pgup", "home", "end":
-			delta := 1
-			if key == "up" || key == "k" || key == "pgup" {
-				delta = -1
-			}
-			if key == "pgdown" || key == "pgup" {
-				delta *= max(1, m.height-8)
-			}
 			if m.details || m.help || m.logView {
 				m.scroll(key)
 			} else {
-				m.cursor = min(max(0, len(m.entries())-1), max(0, m.cursor+delta))
-				if key == "home" {
-					m.cursor = 0
-				}
-				if key == "end" {
-					m.cursor = max(0, len(m.entries())-1)
-				}
+				m.browse(key)
 			}
 			return m, nil
 		case "r":
@@ -515,6 +511,23 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m *model) browse(key string) {
+	delta := 1
+	if key == "up" || key == "k" || key == "pgup" {
+		delta = -1
+	}
+	if key == "pgup" || key == "pgdown" {
+		delta *= max(1, m.bodyHeight()-1)
+	}
+	m.cursor = min(max(0, len(m.entries())-1), max(0, m.cursor+delta))
+	if key == "home" {
+		m.cursor = 0
+	}
+	if key == "end" {
+		m.cursor = max(0, len(m.entries())-1)
+	}
 }
 
 func needsItem(kind string) bool {
@@ -603,7 +616,7 @@ func (m *model) wrappedBody() []string {
 	case m.help:
 		body = help
 	case m.logView:
-		body = strings.TrimSpace(m.snapshot.DiscoveryDetails + "\n\n" + strings.Join(m.logs, "\n\n"))
+		body = strings.TrimSpace(strings.Join([]string{m.snapshot.Status, m.status, m.snapshot.DiscoveryDetails, strings.Join(m.logs, "\n\n")}, "\n\n"))
 		if body == "" {
 			body = "No monitoring announcements in this attachment. A separate watcher retains its own diagnostics."
 		}

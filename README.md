@@ -65,11 +65,12 @@ reviewd watch
 
 `watch` continuously polls GitHub and opens a searchable table inbox. It shows
 PR authors, review/feedback lanes, execution states and recorded activity.
-Press `/` to search, `0`–`4` to filter and `t` to sort by recent activity.
-Enter opens execution details; `?` lists all controls. Select an item,
-press `s` to start its configured skill, then `y` to confirm. Change the relevant
-`"ask"` policies to `"auto"` for automatic handling of new events, or `"notify"`
-for notifications only. The first observed backlog stays held for an explicit
+Search is focused initially: type to filter and use arrows to browse. Press Enter
+to enable table actions: `0`–`4` filters, `t` sorts, Enter opens details, and `?`
+lists all controls. Select an item, press `s` to start its configured skill, then
+`y` to confirm. `/` returns to search; Ctrl-V toggles core/full columns. Change
+the relevant `"ask"` policies to `"auto"` for automatic handling of new events,
+or `"notify"` for notifications only. The first observed backlog stays held for an explicit
 choice even with automatic policies.
 
 For monitoring without the keyboard inbox, keep this running in a terminal:
@@ -78,7 +79,7 @@ For monitoring without the keyboard inbox, keep this running in a terminal:
 reviewd watch --headless
 ```
 
-Both modes run in the foreground; Ctrl-C stops monitoring. `q` also closes the
+Both modes run in the foreground; Ctrl-C stops monitoring. `q` in table focus also closes the
 interactive watcher. A service manager is optional, not installed by reviewd.
 Use `reviewd sync` and `reviewd inbox` to inspect work without launching agents,
 or `reviewd watch --headless --once --json` for one poll and its eligible work.

@@ -44,13 +44,15 @@ with the selected CLI's own continuation interface; reviewd has no private answe
 
 The aligned table separates review/feedback lanes from execution state and shows
 PR authors from captured GitHub data. At normal widths it includes repository,
-PR and title; wide/full columns add activity and its age. Compact columns keep
+PR and title; Ctrl-V selects full columns with activity and its age. Compact columns keep
 identity visible in narrow terminals. Selected-item status and scrollable details
 retain the remaining information.
 
-- `/` focuses search across repository, PR number, author, title, lane, state and
-  recorded activity. Type freely: search keys never dispatch work. Ctrl-U clears,
-  Enter returns to results, Escape clears search and returns to the table.
+- Search is focused on startup, as in cdx. Type across repository, PR number,
+  author, title, lane, state and recorded activity; search keys never dispatch
+  work. Arrows/page keys browse without leaving search. Enter explicitly enables
+  table action shortcuts; `/` returns to search. Ctrl-U clears, Escape clears
+  search and enables table actions.
 - Tab/Shift-Tab cycles table, search, filter and sort controls. Left/right or
   Space changes the focused filter/sort. `0` all, `1` reviews, `2` feedback,
   `3` running **and queued**, `4` history; filters compose with search.
@@ -74,7 +76,7 @@ without retained identity, settings or activity clocks explicitly show unknown.
 Details separate frozen accepted execution settings from prospective operator
 settings; target-base repository preferences are resolved at pickup.
 
-`q` closes this attachment and joins its owned watcher, if any. A separate
+`q` in table focus closes this attachment and joins its owned watcher, if any. A separate
 headless watcher continues. Ctrl-C interrupts. Ordinary mouse selection remains
 terminal-owned. Redirected and `--json` output remain noninteractive.
 

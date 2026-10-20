@@ -26,7 +26,7 @@ func TestSearchTextCannotDispatchActions(t *testing.T) {
 func TestTableShowsSeparateIdentityColumns(t *testing.T) {
 	m := skillModel()
 	view := m.View().Content
-	for _, label := range []string{"Search", "Status", "Lane", "Repository", "Author", "Title"} {
+	for _, label := range []string{"search", "Status", "Lane", "Repository", "Author", "Title"} {
 		if !strings.Contains(view, label) {
 			t.Fatalf("table missing %s", label)
 		}
@@ -112,8 +112,8 @@ func TestShortTableKeepsADataRow(t *testing.T) {
 	m.width, m.height = 40, 12
 	m.snapshot.Entries = []Entry{{Key: "one", Project: "github.com/acme/api", Number: 7, Author: "alice", Lane: "review", State: "running"}}
 	lines := strings.Split(ansi.Strip(m.View().Content), "\n")
-	if !strings.Contains(lines[5], "alice") || !strings.Contains(lines[5], "#7") {
-		t.Fatalf("short table lost its selected data row: %q", lines[5])
+	if !strings.Contains(lines[3], "alice") || !strings.Contains(lines[3], "#7") {
+		t.Fatalf("short table lost its selected data row: %q", lines[3])
 	}
 }
 
@@ -152,6 +152,174 @@ func TestPagingKeepsTheSelectedTableRowVisible(t *testing.T) {
 		e, _ := m.selected()
 		if !strings.Contains(ansi.Strip(m.tableView(14)), e.Author) {
 			t.Fatal("selected action target is outside rendered table after paging")
+		}
+	}
+}
+
+func TestReferenceLayoutKeepsSeparatedControlsAndAnchoredFooter(t *testing.T) {
+	for _, size := range [][2]int{{80, 24}, {120, 40}, {196, 68}} {
+		m := skillModel()
+		m.width, m.height = size[0], size[1]
+		lines := strings.Split(ansi.Strip(m.View().Content), "\n")
+		if !strings.Contains(lines[0], "reviewd") || lines[1] != "" || !strings.Contains(lines[2], "search") || !strings.Contains(lines[2], "Filter:") || lines[3] != "" || lines[4] != "" {
+			t.Fatalf("%v: missing cdx header/control spacing: %q", size, lines[:6])
+		}
+		if !strings.Contains(lines[5], "Repository") || !strings.Contains(lines[6], "› ") || !strings.Contains(lines[size[1]-1], "quit") {
+			t.Fatalf("%v: missing table selection or anchored footer", size)
+		}
+		if strings.Contains(lines[5], "Activity") {
+			t.Fatal("wide viewport silently changed the core column preset")
+		}
+	}
+}
+
+func TestReferenceScrollbarAndCoreIdentitySurvivePagingAndResize(t *testing.T) {
+	m := skillModel()
+	m.snapshot.Entries = nil
+	for i := range 100 {
+		m.snapshot.Entries = append(m.snapshot.Entries, Entry{Key: fmt.Sprint(i), Project: "github.com/acme/api-documentation", Number: i + 1, Author: fmt.Sprintf("author%02d", i), Lane: "feedback", State: "pending_decision"})
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnd})
+	for _, size := range [][2]int{{196, 68}, {80, 24}, {196, 68}} {
+		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		plain := ansi.Strip(m.View().Content)
+		if !strings.Contains(plain, "author99") || !strings.Contains(plain, "100/100") || !strings.Contains(plain, "▲") || !strings.Contains(plain, "▼") {
+			t.Fatalf("%v: selection/position/scrollbar disappeared", size)
+		}
+		body := ansi.Strip(m.tableView(14))
+		if !strings.Contains(body, "author99") {
+			t.Fatalf("%v: selected identity missing from table body", size)
+		}
+		for _, row := range strings.Split(body, "\n") {
+			if strings.Contains(row, "author99") && !strings.Contains(row, "#100") {
+				t.Fatalf("%v: long repository name displaced the PR number: %s", size, row)
+			}
+		}
+	}
+}
+
+func TestStartupSearchMatchesReferenceWithoutActionShortcuts(t *testing.T) {
+	m := skillModel()
+	m.Init()
+	for _, key := range []string{"s", "x", "c", "a", "f", "o", "q", "1", "2", "3", "é"} {
+		press(m, key)
+	}
+	if m.focus != 1 || m.search.Value() != "sxcafoq123é" || m.pending != nil || m.busy || m.filter != 0 {
+		t.Fatal("initial search interpreted text as application shortcuts")
+	}
+	m.search.SetValue("")
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.focus != 1 {
+		t.Fatal("browsing silently enabled action shortcuts")
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	press(m, "s")
+	if m.pending == nil || m.pending.Kind != "start" {
+		t.Fatal("explicit action focus lost the existing start action")
+	}
+}
+
+func TestNormalWidthReservesActivityAgeCapacityAndDiscovery(t *testing.T) {
+	m := skillModel()
+	m.width = 80
+	m.snapshot.CapacityKnown, m.snapshot.Capacity, m.snapshot.Occupied = true, 4, 3
+	m.snapshot.Discovery = "Discovery: 1 ready · 0 pending · 0 failed"
+	m.snapshot.Entries[0].Activity = "Inspecting the changed contract and callers"
+	m.snapshot.Entries[0].ActivityAt = time.Now().Add(-2 * time.Minute)
+	lines := strings.Split(ansi.Strip(m.View().Content), "\n")
+	status := strings.Join(lines[len(lines)-4:len(lines)-2], "\n")
+	for _, text := range []string{"Inspecting", "2m", "Slots: 3/4", "1 free", "0 failed"} {
+		if !strings.Contains(status, text) {
+			t.Fatalf("ordinary viewport displaced %q from progress status: %s", text, status)
+		}
+	}
+}
+
+func TestLongSearchKeepsControlsAnchoredThroughEditingAndResize(t *testing.T) {
+	for _, paste := range []bool{false, true} {
+		m := skillModel()
+		m.Init()
+		query := strings.Repeat("abcdefghijklmnop", 4)
+		if paste {
+			m.Update(tea.PasteMsg{Content: query})
+		} else {
+			for _, r := range query {
+				press(m, string(r))
+			}
+		}
+		for _, position := range []int{len(query), 25} {
+			m.search.SetCursor(position)
+			for _, size := range [][2]int{{80, 24}, {120, 40}, {196, 68}, {80, 24}} {
+				m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+				line := ansi.Strip(m.header()[2])
+				if ansi.StringWidth(line) > size[0] || !strings.HasSuffix(line, "Recent") || !strings.Contains(line, "Filter:") {
+					t.Fatalf("paste=%v cursor=%d size=%v: query displaced controls: %s", paste, position, size, line)
+				}
+				if m.search.Value() != query || m.search.Position() != position {
+					t.Fatal("layout changed the query or logical edit cursor")
+				}
+			}
+		}
+		m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+		m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+		if m.search.Value() != query[:23]+query[24:] || m.search.Position() != 23 {
+			t.Fatal("cursor editing changed after rendering a narrow query viewport")
+		}
+	}
+}
+
+func TestCompactFooterRetainsAnEffectiveExitControl(t *testing.T) {
+	m := skillModel()
+	m.width, m.height = 40, 12
+	m.Init()
+	footer := func() string {
+		lines := strings.Split(ansi.Strip(m.View().Content), "\n")
+		return strings.Join(lines[len(lines)-2:], "\n")
+	}
+	if !strings.Contains(footer(), "ctrl+c quit") {
+		t.Fatal("compact search footer hides its exit control")
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !strings.Contains(footer(), "q quit") || press(m, "q") == nil {
+		t.Fatal("compact table footer hides its effective quit shortcut")
+	}
+}
+
+func TestHealthyDiscoveryDoesNotHideSnapshotDiagnostics(t *testing.T) {
+	const notice = "GitHub work for github.com waits until 2026-10-21T12:30:00Z."
+	for _, history := range []bool{false, true} {
+		m := skillModel()
+		m.width = 80
+		m.snapshot.Status = "Cached inbox. Completed means native execution finished, not verified delivery. " + notice
+		m.snapshot.Discovery = "Discovery: 1 ready · 0 pending · 0 failed"
+		if !history {
+			m.snapshot.Entries = nil
+		}
+		view := ansi.Strip(m.View().Content)
+		if !strings.Contains(view, notice) {
+			t.Fatalf("history=%v: healthy discovery hid the cooldown host/deadline: %s", history, view)
+		}
+		m.logView = true
+		if !strings.Contains(strings.Join(m.wrappedBody(), "\n"), notice) {
+			t.Fatal("full snapshot diagnostic is not reachable in the diagnostic view")
+		}
+	}
+}
+
+func TestDismissedChoiceDoesNotDisplaceSelectedHoldReason(t *testing.T) {
+	for _, state := range []string{"queued", "pending_decision"} {
+		m := skillModel()
+		m.width = 80
+		e := &m.snapshot.Entries[0]
+		e.State, e.Section, e.WaitReason = state, "running", "Initial backlog: explicit start required"
+		if state == "pending_decision" {
+			e.Section = "owed"
+		}
+		press(m, "s")
+		press(m, "n")
+		view := ansi.Strip(m.View().Content)
+		if !strings.Contains(view, "Initial backlog") || !strings.Contains(view, "Choice dismissed") {
+			t.Fatalf("%s: announcement displaced the selected hold explanation: %s", state, view)
 		}
 	}
 }
