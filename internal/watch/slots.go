@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/faustbrian/reviewd/internal/lease"
+	"path/filepath"
 	"time"
 )
 
@@ -67,4 +69,20 @@ func trySlot(directory string, limit int) (*ProfileLock, error) {
 		return nil, errLeaseBusy
 	}
 	return available, nil
+}
+
+// OccupiedSlots observes the same sixteen kernel leases used by trySlot.
+// It does not create missing files, hold admission, or allocate a worker.
+func OccupiedSlots(directory string) (int, error) {
+	occupied := 0
+	for i := 0; i < 16; i++ {
+		busy, err := lease.Busy(filepath.Join(directory, fmt.Sprintf("review-slot-%02d.lock", i)))
+		if err != nil {
+			return 0, err
+		}
+		if busy {
+			occupied++
+		}
+	}
+	return occupied, nil
 }

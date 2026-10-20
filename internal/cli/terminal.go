@@ -2,12 +2,16 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/faustbrian/reviewd/internal/agent"
 	"github.com/faustbrian/reviewd/internal/config"
+	"github.com/faustbrian/reviewd/internal/dispatch"
+	"github.com/faustbrian/reviewd/internal/github"
 	"github.com/faustbrian/reviewd/internal/store"
 	"github.com/faustbrian/reviewd/internal/terminal"
+	"github.com/faustbrian/reviewd/internal/watch"
 	"github.com/spf13/cobra"
 	"io"
 	"sort"
@@ -77,7 +81,48 @@ func (e *execution) terminalSnapshot(ctx context.Context, durable *store.Store, 
 	for _, run := range runs {
 		byRun[run.ID] = run
 	}
-	result := terminal.Snapshot{Status: "Cached inbox. Start queues the selected skill for a watcher."}
+	now := time.Now()
+	defaults, err := config.ResolveDefaults(document, nil)
+	if err != nil {
+		return terminal.Snapshot{}, err
+	}
+	occupied, capacityErr := watch.OccupiedSlots(durable.Directory())
+	result := terminal.Snapshot{Status: "Cached inbox. Completed means native execution finished, not verified delivery.", Capacity: int(defaults.Int("limits.max_concurrent_reviews")), Occupied: occupied, CapacityKnown: capacityErr == nil, RefreshedAt: now}
+	scopeByRepo := map[string]store.DiscoveryScope{}
+	complete, pending, failed := 0, 0, 0
+	var discoveryDetails strings.Builder
+	fmt.Fprintln(&discoveryDetails, "Cached repository discovery (refresh time, not agent activity):")
+	for _, scope := range scopes {
+		scopeByRepo[scope.Repository] = scope
+		fmt.Fprintf(&discoveryDetails, "%s · %s · refreshed %s\n%s\n", scope.Repository, scope.State, timeValue(scope.UpdatedAt), scope.Failure)
+		switch scope.State {
+		case "ok":
+			complete++
+		case "pending":
+			pending++
+		case "inactive":
+		default:
+			failed++
+		}
+	}
+	result.DiscoveryDetails = terminalText(discoveryDetails.String())
+	result.Discovery = fmt.Sprintf("Discovery: %d ready · %d pending · %d failed", complete, pending, failed)
+	observations := map[string]map[int64]store.Observation{}
+	// Read at most once per repository/account, not once per row. No remote I/O.
+	for _, item := range items {
+		key := fmt.Sprintf("%s/%d", item.Repository, item.ActorID)
+		if _, present := observations[key]; present {
+			continue
+		}
+		rows, readErr := durable.Observations(ctx, item.Repository, item.ActorID)
+		if readErr != nil {
+			return result, readErr
+		}
+		observations[key] = rows
+	}
+	locks, lockErr := feedbackModifierDirectory()
+	prLeases := map[string]bool{}
+
 	for _, scope := range scopes {
 		if scope.State != "ok" {
 			result.Status = fmt.Sprintf("Discovery %s for %s: %s", scope.State, scope.Repository, scope.Failure)
@@ -101,8 +146,17 @@ func (e *execution) terminalSnapshot(ctx context.Context, durable *store.Store, 
 			entry.Project = item.Repository
 			entry.State = item.State
 			entry.Title = fmt.Sprintf("%s #%d %s", item.Repository, item.Number, item.Title)
+			entry.PRTitle, entry.Number, entry.UpdatedAt = item.Title, item.Number, item.UpdatedAt
+			entry.Lane = "review"
+			var captured struct {
+				Pull github.Pull `json:"pull"`
+			}
+			if json.Unmarshal(observations[fmt.Sprintf("%s/%d", item.Repository, item.ActorID)][item.PullID].Record, &captured) == nil && captured.Pull.ID == item.PullID && captured.Pull.Repository == item.Repository && captured.Pull.Number == item.Number {
+				entry.Author = captured.Pull.Author.Login
+			}
 			if item.Category == "feedback_handling" || item.Category == "own_pr_feedback" {
 				entry.Section = "feedback"
+				entry.Lane = "feedback"
 			}
 			policy, err := config.Resolve(document, item.Repository, nil, item.Overrides)
 			if err != nil {
@@ -113,7 +167,26 @@ func (e *execution) terminalSnapshot(ctx context.Context, durable *store.Store, 
 				prefix = "feedback."
 			}
 			entry.Model, entry.Effort = policy.String(prefix+"model"), policy.String(prefix+"reasoning_effort")
-			fmt.Fprintf(&text, "PR: %s\nWhy: %s\nTrigger: %s\nAction: %s\nCurrent selection — backend: %s\nCurrent skill: %s%s\nCurrent model: %s / %s\n", item.URL, item.Explanation, item.Trigger, item.Action, agent.Label(policy.String(prefix+"backend")), map[string]string{"codex": "$", "claude": "/"}[policy.String(prefix+"backend")], policy.String(prefix+"skill"), entry.Model, entry.Effort)
+			entry.SelectionModel, entry.SelectionEffort = entry.Model, entry.Effort
+			entry.Backend = policy.String(prefix + "backend")
+			busy := false
+			if (item.State == "queued" || item.State == "retry_wait") && item.RunID == "" && lockErr == nil {
+				key := fmt.Sprintf("%s/%d", item.Repository, item.PullID)
+				if seen, present := prLeases[key]; present {
+					busy = seen
+				} else {
+					host, _, _ := strings.Cut(item.Repository, "/")
+					busy, _ = dispatch.ExecutionBusy(locks, dispatch.ExecutionLeaseKey{Host: host, RepositoryID: scopeByRepo[item.Repository].RepositoryID, PullID: item.PullID})
+					prLeases[key] = busy
+				}
+			}
+			entry.WaitReason = waitingReasons(*item, policy, controls, scopeByRepo, cooldowns, now, occupied, result.Capacity, result.CapacityKnown, busy)
+			if entry.WaitReason != "" {
+				fmt.Fprintln(&text, "Waiting:", entry.WaitReason)
+			}
+			fmt.Fprintf(&text, "PR author: %s\nLane: %s\nDiscovery refreshed: %s\n", known(entry.Author), entry.Lane, timeValue(scopeByRepo[item.Repository].UpdatedAt))
+			fmt.Fprintf(&text, "PR: %s\nWhy: %s\nTrigger: %s\nAction: %s\nProspective operator settings — backend: %s\nProspective skill: %s%s\nProspective model: %s / %s\n", item.URL, item.Explanation, item.Trigger, item.Action, agent.Label(policy.String(prefix+"backend")), map[string]string{"codex": "$", "claude": "/"}[policy.String(prefix+"backend")], policy.String(prefix+"skill"), entry.Model, entry.Effort)
+			fmt.Fprintln(&text, "Target-base repository preferences are resolved at pickup; accepted settings are shown separately below.")
 			if item.Category == "own_pr_feedback" {
 				fmt.Fprintln(&text, "Notification-only feedback. Configure the feedback lane to launch a handling skill.")
 			}
@@ -142,21 +215,28 @@ func (e *execution) terminalSnapshot(ctx context.Context, durable *store.Store, 
 				}
 			}
 			entry.State = string(run.State)
+			projectRun(&entry, *run)
+			fmt.Fprint(&text, executionDetails(entry))
 			if err := e.presentRun(&text, *run); err != nil {
 				return err
 			}
 		}
-		if entry.State == "running" || entry.State == "queued" {
+		if entry.State == "running" || entry.State == "queued" || entry.State == "preparing" || entry.State == "retry_wait" {
 			entry.Section = "running"
-		} else if run != nil && item == nil {
+		} else if run != nil {
 			entry.Section = "history"
 		}
 		entry.Paused = paused[entry.Project]
 		if entry.Paused {
 			fmt.Fprintln(&text, "Project paused; queued work and notifications are held.")
 		}
-		entry.Title, entry.Details = terminalText(entry.Title), terminalText(text.String())
+		identity := fmt.Sprintf("Repository: %s\nPR number: #%d\nTitle: %s\nState: %s\n", entry.Project, entry.Number, known(entry.PRTitle), strings.ReplaceAll(entry.State, "_", " "))
+		entry.Title, entry.Details = terminalText(entry.Title), terminalText(identity+text.String())
 		entry.Model, entry.Effort = terminalText(entry.Model), terminalText(entry.Effort)
+		entry.Author, entry.PRTitle, entry.Activity, entry.WaitReason = terminalText(entry.Author), terminalText(entry.PRTitle), terminalText(entry.Activity), terminalText(entry.WaitReason)
+		// Project remains the canonical pause/resume target; rendering redacts it
+		// without changing the identity sent to ordinary application commands.
+		entry.Backend, entry.SelectionModel, entry.SelectionEffort = terminalText(entry.Backend), terminalText(entry.SelectionModel), terminalText(entry.SelectionEffort)
 		result.Entries = append(result.Entries, entry)
 		return nil
 	}

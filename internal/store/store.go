@@ -81,6 +81,7 @@ type Run struct {
 	EffectiveModel        string          `json:"effective_model,omitempty"`
 	Usage                 json.RawMessage `json:"usage,omitempty"`
 	Specialists           json.RawMessage `json:"specialists,omitempty"`
+	ProgressAt            time.Time       `json:"progress_at,omitzero"`
 	Progress              string          `json:"progress,omitempty"`
 }
 type Store struct {

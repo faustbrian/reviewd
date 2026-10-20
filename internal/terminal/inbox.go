@@ -3,10 +3,13 @@
 package terminal
 
 import (
+	"charm.land/bubbles/v2/textinput"
 	"context"
 	"errors"
 	"fmt"
+	"github.com/faustbrian/reviewd/internal/activity"
 	"io"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -18,16 +21,25 @@ import (
 )
 
 type Entry struct {
-	Purpose, ExecutionKind           string
-	Key, Section, Title, Details     string
-	ItemID, EventKey, RunID, Project string
-	Model, Effort, State             string
-	Paused                           bool
+	Purpose, ExecutionKind                               string
+	Key, Section, Title, Details                         string
+	ItemID, EventKey, RunID, Project                     string
+	Model, Effort, State                                 string
+	SelectionModel, SelectionEffort                      string
+	Paused                                               bool
+	Lane, Author, PRTitle, Backend, Activity, WaitReason string
+	Number                                               int
+	UpdatedAt, ActivityAt                                time.Time
 }
 
 type Snapshot struct {
-	Entries []Entry
-	Status  string
+	Entries            []Entry
+	Status             string
+	Capacity, Occupied int
+	CapacityKnown      bool
+	Discovery          string
+	DiscoveryDetails   string
+	RefreshedAt        time.Time
 }
 
 type Action struct {
@@ -124,36 +136,98 @@ type actionResult struct {
 }
 
 type model struct {
-	ctx            context.Context
-	backend        Backend
-	snapshot       Snapshot
-	cursor, filter int
-	width, height  int
-	details, help  bool
-	logView        bool
-	logs           []string
-	offset         int
-	pending        *Action
-	editing, text  string
-	busy           bool
-	status         string
+	ctx                     context.Context
+	backend                 Backend
+	snapshot                Snapshot
+	cursor, filter          int
+	width, height           int
+	details, help           bool
+	logView                 bool
+	logs                    []string
+	offset                  int
+	pending                 *Action
+	editing, text           string
+	busy                    bool
+	status                  string
+	search                  textinput.Model
+	searchReady             bool
+	focus                   int
+	sortRecent, full, light bool
 }
 
-func (m *model) Init() tea.Cmd { return nextTick() }
-func nextTick() tea.Cmd        { return tea.Tick(time.Second, func(time.Time) tea.Msg { return tick{} }) }
+func (m *model) Init() tea.Cmd {
+	m.ensureSearch()
+	return tea.Batch(nextTick(), tea.RequestBackgroundColor)
+}
+func nextTick() tea.Cmd { return tea.Tick(time.Second, func(time.Time) tea.Msg { return tick{} }) }
 
 func (m *model) entries() []Entry {
-	if m.filter == 0 {
-		return m.snapshot.Entries
-	}
-	sections := []string{"owed", "feedback", "running", "history"}
 	var entries []Entry
+	query := strings.ToLower(m.search.Value())
 	for _, entry := range m.snapshot.Entries {
-		if entry.Section == sections[m.filter-1] {
-			entries = append(entries, entry)
+		if !matchesFilter(entry, m.filter) {
+			continue
 		}
+		haystack := strings.ToLower(fmt.Sprintf("%s %d %s %s %s %s %s %s %s", entry.Project, entry.Number, entry.Author, entry.PRTitle, entry.Title, entry.Lane, entry.State, entry.Activity, entry.WaitReason))
+		if query != "" && !strings.Contains(haystack, query) {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	if m.sortRecent {
+		sort.SliceStable(entries, func(i, j int) bool {
+			a, b := entries[i].ActivityAt, entries[j].ActivityAt
+			if a.IsZero() {
+				a = entries[i].UpdatedAt
+			}
+			if b.IsZero() {
+				b = entries[j].UpdatedAt
+			}
+			if !a.Equal(b) {
+				return a.After(b)
+			}
+			return entries[i].Key < entries[j].Key
+		})
 	}
 	return entries
+}
+
+func matchesFilter(e Entry, filter int) bool {
+	switch filter {
+	case 1:
+		return e.Lane == "review" || (e.Lane == "" && e.Section == "owed")
+	case 2:
+		return e.Lane == "feedback" || e.Section == "feedback"
+	case 3:
+		return e.Section == "running"
+	case 4:
+		return e.Section == "history"
+	default:
+		return true
+	}
+}
+
+func (m *model) keepSelection(key string) {
+	entries := m.entries()
+	m.cursor = min(m.cursor, max(0, len(entries)-1))
+	for i, e := range entries {
+		if e.Key == key {
+			m.cursor = i
+			return
+		}
+	}
+}
+
+func (m *model) ensureSearch() {
+	if m.searchReady {
+		return
+	}
+	m.search = textinput.New()
+	m.search.Prompt = "Search › "
+	m.search.Placeholder = "repository, author, PR, title, activity"
+	m.search.CharLimit = 256
+	m.search.SetWidth(max(1, m.width-11))
+	m.searchReady = true
 }
 
 func (m *model) selected() (Entry, bool) {
@@ -193,8 +267,18 @@ func (m *model) execute(action Action) tea.Cmd {
 
 func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch value := message.(type) {
+	case tea.BackgroundColorMsg:
+		m.light = !value.IsDark()
+		m.ensureSearch()
+		if m.light {
+			m.search.SetStyles(textinput.DefaultLightStyles())
+		} else {
+			m.search.SetStyles(textinput.DefaultDarkStyles())
+		}
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(1, value.Width), max(1, value.Height)
+		m.ensureSearch()
+		m.search.SetWidth(max(1, m.width-11))
 	case tick:
 		m.refresh()
 		return m, nextTick()
@@ -214,6 +298,13 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.refresh()
 	case tea.PasteMsg:
+		if m.focus == 1 && m.pending == nil {
+			m.ensureSearch()
+			old, _ := m.selected()
+			m.search.SetValue(boundedInput(m.search.Value() + value.String()))
+			m.keepSelection(old.Key)
+			return m, nil
+		}
 		if m.editing != "" {
 			m.appendText(value.String())
 		}
@@ -270,7 +361,72 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		m.ensureSearch()
+		if m.focus == 1 {
+			old, _ := m.selected()
+			switch key {
+			case "esc":
+				m.search.SetValue("")
+				m.focus = 0
+				m.search.Blur()
+			case "tab":
+				m.focus = 2
+				m.search.Blur()
+			case "shift+tab":
+				m.focus = 0
+				m.search.Blur()
+			case "enter", "down":
+				m.focus = 0
+				m.search.Blur()
+			case "ctrl+u":
+				m.search.SetValue("")
+			default:
+				m.search, _ = m.search.Update(message)
+			}
+			m.keepSelection(old.Key)
+			return m, nil
+		}
+		if m.focus == 2 || m.focus == 3 {
+			old, _ := m.selected()
+			switch key {
+			case "esc", "enter":
+				m.focus = 0
+			case "tab":
+				m.focus = (m.focus + 1) % 4
+			case "shift+tab":
+				m.focus--
+				if m.focus == 1 {
+					m.search.Focus()
+				}
+			case "left", "right", " ", "space":
+				if m.focus == 2 {
+					delta := 1
+					if key == "left" {
+						delta = -1
+					}
+					m.filter = (m.filter + delta + 5) % 5
+				} else {
+					m.sortRecent = !m.sortRecent
+				}
+			}
+			m.keepSelection(old.Key)
+			return m, nil
+		}
 		switch key {
+		case "/":
+			m.focus = 1
+			return m, m.search.Focus()
+		case "tab":
+			m.focus = 1
+			return m, m.search.Focus()
+		case "shift+tab":
+			m.focus = 3
+		case "ctrl+v":
+			m.full = !m.full
+		case "t":
+			old, _ := m.selected()
+			m.sortRecent = !m.sortRecent
+			m.keepSelection(old.Key)
 		case "q":
 			return m, tea.Quit
 		case "esc":
@@ -285,8 +441,10 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		case "l":
 			m.logView, m.help, m.offset = !m.logView, false, 0
 		case "0", "1", "2", "3", "4":
+			old, _ := m.selected()
 			m.filter = int(key[0] - '0')
-			m.cursor, m.offset = 0, 0
+			m.keepSelection(old.Key)
+			m.offset = 0
 		case "up", "k", "down", "j", "pgdown", "pgup", "home", "end":
 			delta := 1
 			if key == "up" || key == "k" || key == "pgup" {
@@ -395,26 +553,36 @@ func clean(text string) string {
 }
 
 func clipped(text string, width int) string {
-	text = strings.ReplaceAll(strings.ReplaceAll(clean(text), "\n", " "), "\t", "    ")
+	text = strings.ReplaceAll(strings.ReplaceAll(clean(activity.Redact(text)), "\n", " "), "\t", "    ")
 	return ansi.Truncate(text, max(1, width), "…")
 }
 
-func (m *model) header() []string {
+func (m *model) confirmationHeader() []string {
 	line := func(text string) string { return clipped(text, max(1, m.width)) }
-	lines := []string{line("reviewd — personal review inbox"), line("0 All | 1 Reviews owed | 2 Feedback | 3 Running | 4 History")}
+	lines := []string{}
 	if m.pending != nil {
 		entry := m.pending.Entry
 		heading := map[string]string{"start": "Start configured skill", "skip": "Skip event", "cancel": "Cancel agent", "pause": "Pause project", "resume": "Resume project", "snooze": "Snooze event", "snooze-head": "Snooze until new commits", "unsnooze": "Release snooze", "follow": "Follow PR", "unfollow": "Stop following PR"}[m.pending.Kind]
-		lines = append(lines, line(heading+": "+entry.Title))
+		identity := entry.Title
+		if entry.Project != "" {
+			identity = fmt.Sprintf("%s %s · %s", numberLabel(entry.Number), shortRepo(entry.Project), fallback(entry.Author, "unknown"))
+		}
+		lines = append(lines, line(heading), line(identity))
 		if m.pending.Kind == "start" {
 			model, effort := m.pending.Model, m.pending.Effort
 			if model == "" {
-				model = entry.Model
+				model = entry.SelectionModel
+				if entry.Project == "" {
+					model = entry.Model
+				}
 			}
 			if effort == "" {
-				effort = entry.Effort
+				effort = entry.SelectionEffort
+				if entry.Project == "" {
+					effort = entry.Effort
+				}
 			}
-			lines = append(lines, line(fmt.Sprintf("Model %s / %s", model, effort)), line("m model · e effort · y start · n/esc cancel"))
+			lines = append(lines, line(fmt.Sprintf("Model %s / %s", model, effort)), line("y start · n/esc cancel · m model · e effort"))
 		} else if m.pending.Kind == "snooze" {
 			lines = append(lines, line("Duration "+m.pending.Duration+" · d edit · y confirm · n/esc cancel"))
 		} else {
@@ -435,7 +603,7 @@ func (m *model) wrappedBody() []string {
 	case m.help:
 		body = help
 	case m.logView:
-		body = strings.Join(m.logs, "\n\n")
+		body = strings.TrimSpace(m.snapshot.DiscoveryDetails + "\n\n" + strings.Join(m.logs, "\n\n"))
 		if body == "" {
 			body = "No monitoring announcements in this attachment. A separate watcher retains its own diagnostics."
 		}
@@ -449,11 +617,11 @@ func (m *model) wrappedBody() []string {
 	if body == "" {
 		return nil
 	}
-	body = strings.ReplaceAll(clean(body), "\t", "    ")
+	body = strings.ReplaceAll(clean(activity.Redact(body)), "\t", "    ")
 	return strings.Split(ansi.Hardwrap(body, max(1, m.width), false), "\n")
 }
 
-func (m *model) bodyHeight() int { return max(0, m.height-len(m.header())-3) }
+func (m *model) bodyHeight() int { return max(0, m.height-len(m.header())-4) }
 
 func (m *model) scroll(key string) {
 	limit := max(0, len(m.wrappedBody())-m.bodyHeight())
@@ -472,62 +640,3 @@ func (m *model) scroll(key string) {
 		m.offset = limit
 	}
 }
-
-func (m *model) View() tea.View {
-	width, height := max(1, m.width), max(1, m.height)
-	line := func(text string) string { return clipped(text, width) }
-	lines := m.header()
-	footer := "↑/↓ select · enter details · s start skill · x skip · ? help · q detach"
-	if width < 65 {
-		footer = "enter details · ? help · q detach"
-	}
-	remaining := m.bodyHeight()
-	if wrapped := m.wrappedBody(); wrapped != nil {
-		start := min(m.offset, max(0, len(wrapped)-remaining))
-		for _, row := range wrapped[start:min(len(wrapped), start+remaining)] {
-			lines = append(lines, line(row))
-		}
-	} else {
-		entries := m.entries()
-		start := max(0, m.cursor-remaining+1)
-		for index := start; index < len(entries) && index < start+remaining; index++ {
-			prefix := "  "
-			if index == m.cursor {
-				prefix = "> "
-			}
-			state := strings.ReplaceAll(entries[index].State, "_", " ")
-			lines = append(lines, line(prefix+state+" ["+entries[index].Section+"] "+entries[index].Title))
-		}
-		if len(entries) == 0 && remaining > 0 {
-			lines = append(lines, line("No cached items in this view. Sync or run watch to discover work."))
-		}
-	}
-	for len(lines) < height-3 {
-		lines = append(lines, "")
-	}
-	status := m.status
-	if status == "" {
-		status = m.snapshot.Status
-	}
-	lines = append(lines, line(status), line(footer), line("Skills own their workflows and tools; completed means the selected native agent finished."))
-	if len(lines) > height {
-		lines = lines[:height]
-	}
-	view := tea.NewView(strings.Join(lines, "\n"))
-	view.AltScreen = true
-	view.MouseMode = tea.MouseModeNone
-	return view
-}
-
-const help = `Navigation: arrows/j/k, Home/End, PgUp/PgDn; enter details, esc back.
-0 all; 1 reviews owed; 2 feedback; 3 running; 4 history.
-s start the selected event's configured review or feedback skill; h is an alias.
-m/e in the start confirmation select a one-run model and effort.
-x skip this event; f follow; F stop following; c request agent cancellation.
-a pause/resume project; z snooze duration (d edits); Z until new commits; u unsnooze.
-o open PR; O open a historical recorded GitHub review conversation.
-r refresh; l monitoring log; ? help; q detach; Ctrl-C interrupt.
-y confirms a pending choice. Escape/n dismiss without changing the decision.
-A running skill uses your normal native agent settings, tools and MCP servers.
-Reviewd does not manage the skill's review or feedback workflow.
-No mouse reporting is enabled: ordinary drag remains terminal-owned.`

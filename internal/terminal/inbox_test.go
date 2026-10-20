@@ -58,6 +58,7 @@ func TestUnicodeViewsRespectViewportWithoutControlExecution(t *testing.T) {
 			for _, details := range []bool{false, true} {
 				m.width, m.height, m.details = width, height, details
 				view := m.View()
+				view.Content = ansi.Strip(view.Content)
 				if !utf8.ValidString(view.Content) || strings.ContainsAny(view.Content, "\x1b\t") || len(strings.Split(view.Content, "\n")) > height {
 					t.Fatalf("invalid or oversized terminal view at %dx%d", width, height)
 				}

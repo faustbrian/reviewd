@@ -43,3 +43,21 @@ func (l *Lease) Close() error { return l.file.Close() }
 
 // Info identifies the locked inode, not whatever currently occupies its path.
 func (l *Lease) Info() (os.FileInfo, error) { return l.file.Stat() }
+
+// Busy observes an existing stable-inode lease without creating a file or
+// retaining ownership. flock has no read-only query on both supported OSes:
+// a successful nonblocking probe is immediately released. This point-in-time
+// observation never promises admission or reconciles an uncertain owner.
+func Busy(path string) (bool, error) {
+	l, err := Acquire(path, false)
+	if errors.Is(err, ErrBusy) {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return false, l.Close()
+}

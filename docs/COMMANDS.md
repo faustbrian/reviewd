@@ -42,13 +42,41 @@ with the selected CLI's own continuation interface; reviewd has no private answe
 
 ## Keyboard inbox
 
-`0` all, `1` reviews owed, `2` feedback, `3` running, `4` history. Arrows select,
-Enter opens details, `s` starts the event's skill (`h` aliases it), `x` skips,
-`c` cancels, `a` pauses/resumes a project, `z` snoozes, `Z` holds until new commits,
-`u` unsnoozes, `f`/`F` follow/unfollow, and `o` opens the PR. `m`/`e` edit model
-and effort in a start choice; `y` confirms and Escape/`n` dismisses. `?` shows
-help; `q` closes the attachment and its owned watcher. An independent headless
-watcher continues. Ordinary mouse selection remains terminal-owned.
+The aligned table separates review/feedback lanes from execution state and shows
+PR authors from captured GitHub data. At normal widths it includes repository,
+PR and title; wide/full columns add activity and its age. Compact columns keep
+identity visible in narrow terminals. Selected-item status and scrollable details
+retain the remaining information.
+
+- `/` focuses search across repository, PR number, author, title, lane, state and
+  recorded activity. Type freely: search keys never dispatch work. Ctrl-U clears,
+  Enter returns to results, Escape clears search and returns to the table.
+- Tab/Shift-Tab cycles table, search, filter and sort controls. Left/right or
+  Space changes the focused filter/sort. `0` all, `1` reviews, `2` feedback,
+  `3` running **and queued**, `4` history; filters compose with search.
+- `t` toggles queue order/recent activity; Ctrl-V toggles full columns where
+  width permits. Selection follows item identity across updates and sorting.
+- Arrows, Home/End and PgUp/PgDn navigate; Enter opens details. `?` opens help,
+  `l` cached discovery diagnostics and the monitoring log; Escape returns.
+  Details/help/logs are scrollable.
+- `s` starts the event's skill (`h` aliases it), `x` skips, `c` cancels,
+  `a` pauses/resumes a project, `z` snoozes, `Z` holds until new commits,
+  `u` unsnoozes, `f`/`F` follows/unfollows and `o` opens the PR.
+  `m`/`e` edits model/effort in a start choice; `y` confirms the captured event,
+  Escape/`n` dismisses. Refreshing never grants consent.
+
+Slots are a point-in-time observation of existing execution leases. Queue
+explanations report known backlog, pause, snooze, retry/cooldown, debounce,
+discovery, capacity or PR-ownership facts; otherwise the reason remains unknown.
+Activity age measures changes to the recorded preview, not discovery refreshes
+or usage updates. A completed tool event is not a completed review. Older runs
+without retained identity, settings or activity clocks explicitly show unknown.
+Details separate frozen accepted execution settings from prospective operator
+settings; target-base repository preferences are resolved at pickup.
+
+`q` closes this attachment and joins its owned watcher, if any. A separate
+headless watcher continues. Ctrl-C interrupts. Ordinary mouse selection remains
+terminal-owned. Redirected and `--json` output remain noninteractive.
 
 There are no reviewd publish, repair, refresh-checks, feedback-resume, private
 input-answer, metadata, label or issue-tracker workflow commands.

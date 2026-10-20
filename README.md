@@ -63,7 +63,10 @@ reviewd doctor
 reviewd watch
 ```
 
-`watch` continuously polls GitHub and opens a keyboard inbox. Select an item,
+`watch` continuously polls GitHub and opens a searchable table inbox. It shows
+PR authors, review/feedback lanes, execution states and recorded activity.
+Press `/` to search, `0`–`4` to filter and `t` to sort by recent activity.
+Enter opens execution details; `?` lists all controls. Select an item,
 press `s` to start its configured skill, then `y` to confirm. Change the relevant
 `"ask"` policies to `"auto"` for automatic handling of new events, or `"notify"`
 for notifications only. The first observed backlog stays held for an explicit

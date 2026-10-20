@@ -37,10 +37,11 @@ func (s *Store) RecordAgent(ctx context.Context, id, thread, model string, usage
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE runs SET thread_id=?,
  record=json_set(record,'$.requested_model',?,'$.usage',json(?),
+ '$.progress_at',CASE WHEN ?!='' AND ?!=COALESCE(json_extract(record,'$.progress'),'') THEN ? ELSE COALESCE(json_extract(record,'$.progress_at'),'0001-01-01T00:00:00Z') END,
  '$.progress',CASE WHEN ?='' THEN COALESCE(json_extract(record,'$.progress'),'') ELSE ? END),updated_at=?
  WHERE id=? AND state='running' AND json_extract(record,'$.executor') IN (?,?)
  AND (?!='' OR json_extract(record,'$.executor')=?)
- AND (COALESCE(thread_id,'')='' OR thread_id=?)`, thread, model, string(usage), text, text, timestamp(), id, NativeExecutor, ClaudeExecutor, model, ClaudeExecutor, thread)
+ AND (COALESCE(thread_id,'')='' OR thread_id=?)`, thread, model, string(usage), text, text, timestamp(), text, text, timestamp(), id, NativeExecutor, ClaudeExecutor, model, ClaudeExecutor, thread)
 	return changed(result, err, "could not record normal agent progress")
 }
 

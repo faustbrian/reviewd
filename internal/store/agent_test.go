@@ -224,3 +224,52 @@ func TestAgentRecoveryRecordsInterruptedExecutionWithoutReplay(t *testing.T) {
 		})
 	}
 }
+
+func TestActivityClockChangesOnlyWithVisiblePreview(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	r, _, err := s.Create(ctx, Run{Executor: NativeExecutor, Purpose: "review", Repository: "github.com/acme/api", RepositoryID: 99, PullID: 700, Number: 7, ActorID: 43, ActorLogin: "operator", WorkKey: "clock", State: Queued, Configuration: json.RawMessage(`{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.ClaimAgent(ctx, r.ID)
+	clock := func() string {
+		t.Helper()
+		r, err := s.Get(ctx, r.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, _ := json.Marshal(r)
+		var m map[string]any
+		json.Unmarshal(data, &m)
+		v, _ := m["progress_at"].(string)
+		return v
+	}
+	if err := s.RecordAgent(ctx, r.ID, "native", "gpt-6.1-sol", nil, "Reading files"); err != nil {
+		t.Fatal(err)
+	}
+	first := clock()
+	if first == "" || strings.HasPrefix(first, "0001-") {
+		t.Fatal("visible activity has no own timestamp")
+	}
+	for _, text := range []string{"Reading files", ""} {
+		if err := s.RecordAgent(ctx, r.ID, "native", "gpt-6.1-sol", json.RawMessage(`{"input_tokens":8}`), text); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if clock() != first {
+		t.Fatal("unchanged/usage-only progress reset activity age")
+	}
+	// A fixed older instant makes the changed-preview oracle independent of clock speed.
+	s.db.ExecContext(ctx, `UPDATE runs SET record=json_set(record,'$.progress_at','2001-01-01T00:00:00Z') WHERE id=?`, r.ID)
+	if err := s.RecordAgent(ctx, r.ID, "native", "gpt-6.1-sol", nil, "Checking tests"); err != nil {
+		t.Fatal(err)
+	}
+	if clock() == "2001-01-01T00:00:00Z" {
+		t.Fatal("changed activity retained old timestamp")
+	}
+}

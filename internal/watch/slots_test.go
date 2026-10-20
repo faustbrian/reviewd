@@ -57,3 +57,29 @@ func TestReviewSlotsBoundAllProcessesAndReleaseOnExit(t *testing.T) {
 		t.Fatalf("process death stranded a slot: %v", err)
 	}
 }
+
+func TestOccupiedSlotsObservesExistingKernelOwnership(t *testing.T) {
+	directory := t.TempDir()
+	if n, err := OccupiedSlots(directory); err != nil || n != 0 {
+		t.Fatalf("empty capacity: %d %v", n, err)
+	}
+	if files, _ := os.ReadDir(directory); len(files) != 0 {
+		t.Fatal("observation created leases")
+	}
+	first, err := AcquireSlot(context.Background(), directory, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := AcquireSlot(context.Background(), directory, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := OccupiedSlots(directory); err != nil || n != 2 {
+		t.Fatalf("occupied capacity: %d %v", n, err)
+	}
+	second.Close()
+	if n, err := OccupiedSlots(directory); err != nil || n != 1 {
+		t.Fatalf("released capacity: %d %v", n, err)
+	}
+}

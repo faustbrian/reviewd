@@ -91,7 +91,7 @@ func TestTerminalDistinguishesCurrentSelectionFromAcceptedBackend(t *testing.T) 
 		t.Fatalf("linked terminal entry missing: %+v %v", snapshot, err)
 	}
 	details := snapshot.Entries[0].Details
-	if !strings.Contains(details, "Current selection — backend: Codex") || !strings.Contains(details, "Backend: Claude Code") || !strings.Contains(details, "Claude Code session: accepted-claude-session") {
+	if !strings.Contains(details, "Prospective operator settings — backend: Codex") || !strings.Contains(details, "Backend: Claude Code") || !strings.Contains(details, "Claude Code session: accepted-claude-session") {
 		t.Fatalf("current policy confused with accepted execution: %s", details)
 	}
 }

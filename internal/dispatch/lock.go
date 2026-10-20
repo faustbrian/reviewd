@@ -183,3 +183,12 @@ func (m *ExecutionLease) Close() error {
 	m.once.Do(func() { m.closeErr = m.lock.Close() })
 	return m.closeErr
 }
+
+// ExecutionBusy reports only a currently held kernel PR lease, not the
+// liveness of a durable owner pointer. It never reconciles or changes a run.
+func ExecutionBusy(directory string, key ExecutionLeaseKey) (bool, error) {
+	if directory == "" || !executionLeaseHost.MatchString(key.Host) || key.RepositoryID <= 0 || key.PullID <= 0 {
+		return false, errors.New("invalid PR lease observation scope")
+	}
+	return lease.Busy(filepath.Join(directory, executionLeaseName(key)+".lock"))
+}
