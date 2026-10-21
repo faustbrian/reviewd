@@ -68,8 +68,9 @@ PR authors, review/feedback lanes, execution states and recorded activity.
 Search is focused initially: type to filter and use arrows to browse. Press Enter
 to enable table actions: `0`–`4` filters, `t` sorts, Enter opens details, and `?`
 lists all controls. Select an item, press `s` to start its configured skill, then
-`y` to confirm. `/` returns to search; Ctrl-V toggles core/full columns. Change
-the relevant `"ask"` policies to `"auto"` for automatic handling of new events,
+`y` to confirm. `/` returns to search; Ctrl-V toggles core/full columns and
+Ctrl-O switches compact/comfortable rows. The wheel browses the table or scrolls open details;
+F2 releases mouse capture for terminal text selection. Change the relevant `"ask"` policies to `"auto"` for automatic handling of new events,
 or `"notify"` for notifications only. The first observed backlog stays held for an explicit
 choice even with automatic policies.
 

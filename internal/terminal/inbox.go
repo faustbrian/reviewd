@@ -1,5 +1,5 @@
 // Package terminal is an optional presentation over ordinary application actions.
-// It owns no scheduler, publication client, decision store, or mouse reporting.
+// It owns no scheduler, publication client, or decision store.
 package terminal
 
 import (
@@ -156,6 +156,7 @@ type model struct {
 	searchReady             bool
 	focus                   int
 	sortRecent, full, light bool
+	comfortable, mouseOff   bool
 }
 
 func (m *model) Init() tea.Cmd {
@@ -301,6 +302,26 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Action not completed: " + value.err.Error()
 		}
 		m.refresh()
+	case tea.MouseWheelMsg:
+		if m.mouseOff || value.X < 0 || value.X >= m.width || value.Y < len(m.header()) || value.Y >= m.height-4 {
+			return m, nil
+		}
+		key := "down"
+		switch value.Button {
+		case tea.MouseWheelUp:
+			key = "up"
+		case tea.MouseWheelDown:
+		default:
+			return m, nil
+		}
+		for range 3 {
+			if m.pending != nil || m.details || m.help || m.logView {
+				m.scroll(key)
+			} else {
+				m.browse(key)
+			}
+		}
+		return m, nil
 	case tea.PasteMsg:
 		if m.focus == 1 && m.pending == nil {
 			m.ensureSearch()
@@ -316,6 +337,10 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		key := value.String()
 		if key == "ctrl+c" {
 			return m, tea.Interrupt
+		}
+		if key == "f2" {
+			m.mouseOff = !m.mouseOff
+			return m, nil
 		}
 		if m.editing != "" {
 			switch key {
@@ -365,8 +390,12 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if key == "ctrl+v" {
+		switch key {
+		case "ctrl+v":
 			m.full = !m.full
+			return m, nil
+		case "ctrl+o":
+			m.comfortable = !m.comfortable
 			return m, nil
 		}
 		m.ensureSearch()
@@ -519,7 +548,7 @@ func (m *model) browse(key string) {
 		delta = -1
 	}
 	if key == "pgup" || key == "pgdown" {
-		delta *= max(1, m.bodyHeight()-1)
+		delta *= m.visibleRows(m.bodyHeight())
 	}
 	m.cursor = min(max(0, len(m.entries())-1), max(0, m.cursor+delta))
 	if key == "home" {
@@ -565,9 +594,12 @@ func clean(text string) string {
 	return safe.String()
 }
 
+func cellText(text string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(clean(activity.Redact(text)), "\n", " "), "\t", "    ")
+}
+
 func clipped(text string, width int) string {
-	text = strings.ReplaceAll(strings.ReplaceAll(clean(activity.Redact(text)), "\n", " "), "\t", "    ")
-	return ansi.Truncate(text, max(1, width), "…")
+	return ansi.Truncate(cellText(text), max(1, width), "…")
 }
 
 func (m *model) confirmationHeader() []string {

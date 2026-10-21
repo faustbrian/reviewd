@@ -91,7 +91,11 @@ func TestAllNewColumnsAreSafeAndFitViewports(t *testing.T) {
 		m.light = light
 		for _, size := range [][2]int{{40, 12}, {80, 24}, {140, 35}, {1, 1}, {24, 10}} {
 			m.width, m.height = size[0], size[1]
-			plain := ansi.Strip(m.View().Content)
+			raw := m.View().Content
+			if strings.Contains(raw, "\x1b[2J") {
+				t.Fatal("untrusted erase-screen sequence escaped into the terminal frame")
+			}
+			plain := ansi.Strip(raw)
 			if strings.Contains(plain, canary) || strings.ContainsAny(plain, "\x1b\t") {
 				t.Fatalf("untrusted column escaped rendering: %q", plain)
 			}

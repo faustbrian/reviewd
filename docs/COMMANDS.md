@@ -44,7 +44,9 @@ with the selected CLI's own continuation interface; reviewd has no private answe
 
 The aligned table separates review/feedback lanes from execution state and shows
 PR authors from captured GitHub data. At normal widths it includes repository,
-PR and title; Ctrl-V selects full columns with activity and its age. Compact columns keep
+PR and title; Ctrl-V selects full columns with activity and its age. Ctrl-O
+switches Compact/Comfortable row density independently: Comfortable gives long
+titles and activity two lines. The status area shows both choices. Compact columns keep
 identity visible in narrow terminals. Selected-item status and scrollable details
 retain the remaining information.
 
@@ -57,8 +59,12 @@ retain the remaining information.
   Space changes the focused filter/sort. `0` all, `1` reviews, `2` feedback,
   `3` running **and queued**, `4` history; filters compose with search.
 - `t` toggles queue order/recent activity; Ctrl-V toggles full columns where
-  width permits. Selection follows item identity across updates and sorting.
-- Arrows, Home/End and PgUp/PgDn navigate; Enter opens details. `?` opens help,
+  width permits. Queue/Recent is also visible in the top Sort control; Tab then
+  left/right changes it without entering table action focus. Selection follows
+  item identity across updates and sorting.
+- Arrows, Home/End and PgUp/PgDn navigate; the wheel browses three entries per
+  notch inside the table, or scrolls the open details/help/diagnostics/confirmation
+  without changing its captured target. Enter opens details. `?` opens help,
   `l` cached discovery diagnostics and the monitoring log; Escape returns.
   Details/help/logs are scrollable.
 - `s` starts the event's skill (`h` aliases it), `x` skips, `c` cancels,
@@ -77,8 +83,11 @@ Details separate frozen accepted execution settings from prospective operator
 settings; target-base repository preferences are resolved at pickup.
 
 `q` in table focus closes this attachment and joins its owned watcher, if any. A separate
-headless watcher continues. Ctrl-C interrupts. Ordinary mouse selection remains
-terminal-owned. Redirected and `--json` output remain noninteractive.
+headless watcher continues. Ctrl-C interrupts. Mouse capture starts enabled so
+the wheel operates the inbox rather than terminal scrollback. F2 toggles capture
+without changing work; turn it off for ordinary terminal text selection. The
+Mouse status is shown at wide widths. Terminal mouse mode is restored on exit.
+Redirected and `--json` output remain noninteractive.
 
 There are no reviewd publish, repair, refresh-checks, feedback-resume, private
 input-answer, metadata, label or issue-tracker workflow commands.

@@ -1,7 +1,6 @@
 package terminal
 
 import (
-	"charm.land/bubbles/v2/table"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"fmt"
@@ -14,7 +13,11 @@ import (
 // Use terminal palette colors like cdx; in particular, selection reverses the
 // terminal's own foreground/background instead of reversing the cyan accent.
 func (m *model) colors() (lipgloss.Style, lipgloss.Style) {
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true), lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	accent := "6"
+	if m.light {
+		accent = "4"
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(accent)).Bold(true), lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 }
 
 func (m *model) header() []string {
@@ -148,46 +151,96 @@ func (m *model) tableView(height int) string {
 	var cols []column
 	switch {
 	case width < 59:
-		cols = []column{{"Status", 7, status}, {"Lane", 4, lane}, {"Repository / PR", max(1, width-27), repoPR(max(1, width-27))}, {"Author", 8, author}}
+		cols = []column{{"Status", 7, status}, {"Lane", 4, lane}, {"Repository / PR", max(1, width-24), repoPR(max(1, width-24))}, {"Author", 8, author}}
 	case m.full && width >= 119:
-		cols = []column{{"Status", 12, status}, {"Lane", 8, lane}, {"Repository / PR", 25, repoPR(25)}, {"Author", 16, author}, {"Title", max(1, width-102), title}, {"Activity / waiting", 22, activity}, {"Age", 5, func(e Entry) string { return age(e.ActivityAt, now) }}}
+		cols = []column{{"Status", 12, status}, {"Lane", 8, lane}, {"Repository / PR", 25, repoPR(25)}, {"Author", 16, author}, {"Title", max(1, width-96), title}, {"Activity / waiting", 22, activity}, {"Age", 5, func(e Entry) string { return age(e.ActivityAt, now) }}}
 	case width >= 119:
-		cols = []column{{"Status", 12, status}, {"Lane", 8, lane}, {"Repository / PR", 28, repoPR(28)}, {"Author", 18, author}, {"Title", width - 76, title}}
+		cols = []column{{"Status", 12, status}, {"Lane", 8, lane}, {"Repository / PR", 28, repoPR(28)}, {"Author", 18, author}, {"Title", width - 72, title}}
 	default:
-		cols = []column{{"Status", 10, status}, {"Lane", 8, lane}, {"Repository / PR", 18, repoPR(18)}, {"Author", 10, author}, {"Title", max(1, width-58), title}}
+		cols = []column{{"Status", 10, status}, {"Lane", 8, lane}, {"Repository / PR", 18, repoPR(18)}, {"Author", 10, author}, {"Title", max(1, width-52), title}}
 	}
-	// The marker is part of the selected row, not a colored table border.
-	columns := []table.Column{{Width: 2}}
-	for i, c := range cols {
-		gap := 2
-		if width < 59 {
-			gap = 1
-		}
-		if i == len(cols)-1 {
-			gap = 0
-		}
-		columns = append(columns, table.Column{Title: clipped(c.name, c.width), Width: c.width + gap})
-	}
-	entries := m.entries()
-	rows := make([]table.Row, len(entries))
-	for i, e := range entries {
-		marker := ""
-		if i == m.cursor {
-			marker = "› "
-		}
-		rows[i] = table.Row{marker}
-		for _, c := range cols {
-			rows[i] = append(rows[i], clipped(c.value(e), c.width))
-		}
-	}
+	gap := 1 // cdx TABLE_COLUMN_SPACING in src/lib.rs.
 	_, muted := m.colors()
-	t := table.New(table.WithColumns(columns), table.WithRows(rows), table.WithHeight(max(2, height)), table.WithWidth(width), table.WithStyles(table.Styles{Header: muted, Cell: lipgloss.NewStyle(), Selected: lipgloss.NewStyle().Reverse(true)}))
-	// Bubbles v2.2.1 SetCursor leaves the initial scroll offset unchanged.
-	t.MoveDown(m.cursor)
-	lines := strings.Split(t.View(), "\n")
-	if len(entries) == 0 && len(lines) > 1 {
-		lines[1] = muted.Render("No work matches the search and filter.")
+	repoColor, authorColor := "6", "5"
+	if m.light {
+		repoColor, authorColor = "4", "5"
 	}
+	identityStyle := func(name string) lipgloss.Style {
+		switch name {
+		case "Repository / PR":
+			return lipgloss.NewStyle().Foreground(lipgloss.Color(repoColor))
+		case "Author":
+			return lipgloss.NewStyle().Foreground(lipgloss.Color(authorColor))
+		case "Title":
+			return lipgloss.NewStyle().Bold(true)
+		default:
+			return lipgloss.NewStyle()
+		}
+	}
+	pad := func(text string, size int) string {
+		return text + strings.Repeat(" ", max(0, size-ansi.StringWidth(text)))
+	}
+	header := "  "
+	for i, c := range cols {
+		header += pad(clipped(c.name, c.width), c.width)
+		if i < len(cols)-1 {
+			header += strings.Repeat(" ", gap)
+		}
+	}
+	lines := []string{muted.Render(pad(ansi.Truncate(header, width, "…"), width))}
+	entries := m.entries()
+	rowHeight, visible := m.rowHeight(), m.visibleRows(height)
+	first := max(0, m.cursor-visible+1)
+	for index := first; index < min(len(entries), first+visible); index++ {
+		e := entries[index]
+		values := make([][]string, len(cols))
+		for i, c := range cols {
+			text := cellText(c.value(e))
+			values[i] = []string{clipped(text, c.width)}
+			if rowHeight == 2 {
+				if c.name == "Title" || c.name == "Activity / waiting" {
+					wrapped := strings.Split(ansi.Hardwrap(text, c.width, false), "\n")
+					values[i] = []string{wrapped[0], ""}
+					if len(wrapped) > 1 {
+						values[i][1] = clipped(strings.Join(wrapped[1:], ""), c.width)
+					}
+				} else {
+					values[i] = append(values[i], "")
+				}
+			}
+		}
+		for line := range rowHeight {
+			marker := "  "
+			if index == m.cursor && line == 0 {
+				marker = "› "
+			}
+			row := marker
+			for i, c := range cols {
+				cell := pad(values[i][line], c.width)
+				// Keep the selected logical row neutral across both lines;
+				// per-cell foregrounds would become uneven reverse backgrounds.
+				if index != m.cursor {
+					cell = identityStyle(c.name).Render(cell)
+				}
+				row += cell
+				if i < len(cols)-1 {
+					row += strings.Repeat(" ", gap)
+				}
+			}
+			row = pad(ansi.Truncate(row, width, "…"), width)
+			if index == m.cursor {
+				row = lipgloss.NewStyle().Reverse(true).Render(row)
+			}
+			lines = append(lines, row)
+		}
+	}
+	if len(entries) == 0 && height > 1 {
+		lines = append(lines, muted.Render("No work matches the search and filter."))
+	}
+	for len(lines) < height {
+		lines = append(lines, strings.Repeat(" ", width))
+	}
+	lines = lines[:min(len(lines), height)]
 	for i, line := range lines {
 		bar := " "
 		if len(entries) > 0 && height > 2 {
@@ -198,18 +251,30 @@ func (m *model) tableView(height int) string {
 				bar = "▼"
 			default:
 				bar = "│"
-				track := max(1, len(lines)-2)
-				thumb := max(1, track*min(len(entries), height-1)/len(entries))
+				track := max(1, height-2)
+				thumb := max(1, track*min(len(entries), visible)/len(entries))
 				position := (track - thumb) * m.cursor / max(1, len(entries)-1)
 				if i-1 >= position && i-1 < position+thumb {
 					bar = "█"
 				}
 			}
 		}
-		line = ansi.Truncate(line, width, "…")
-		lines[i] = line + strings.Repeat(" ", max(0, width-ansi.StringWidth(line))) + muted.Render(bar)
+		lines[i] = pad(ansi.Truncate(line, width, "…"), width) + muted.Render(bar)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// cdx's Comfortable mode gives each logical entry two terminal lines. Compact
+// fallback keeps a whole selectable entry visible in the smallest usable body.
+func (m *model) rowHeight() int {
+	if m.comfortable && m.bodyHeight() >= 3 {
+		return 2
+	}
+	return 1
+}
+
+func (m *model) visibleRows(height int) int {
+	return max(1, (height-1)/m.rowHeight())
 }
 
 func (m *model) footer() []string {
@@ -220,13 +285,16 @@ func (m *model) footer() []string {
 		if m.width < 70 {
 			return []string{"←/→ change · Tab focus · ctrl+c quit", "enter actions · ctrl+v columns"}
 		}
-		return []string{"Tab/shift+Tab focus · ←/→ or space change option · enter table actions", "ctrl+v columns · enter then ? help · ctrl+c quit"}
+		return []string{"Tab/shift+Tab focus · ←/→ or space change option · enter table actions", "ctrl+v columns   ctrl+o view   F2 mouse   ctrl+c quit"}
 	}
 	if m.focus == 1 {
 		if m.width < 70 {
 			return []string{"enter actions · Tab focus · ctrl+c quit", "type search · ctrl+u clear · ↑/↓ browse"}
 		}
-		return []string{"enter actions · Tab focus search/filter/sort · ←/→ or space change option", "type search · ctrl+u clear · ctrl+v columns · ↑/↓ browse · ctrl+c quit"}
+		if m.width < 120 {
+			return []string{"enter actions   tab focus   ←/→ change option   ctrl+c quit", "type search   ctrl+v columns   ctrl+o view   ↑/↓ browse   ctrl+c quit"}
+		}
+		return []string{"enter actions   ctrl+c quit   tab focus search/filter/sort   ←/→ or space change option", "type search   ctrl+u clear   ctrl+v columns   ctrl+o view   ↑/↓ wheel browse   F2 mouse   ctrl+c quit"}
 	}
 	if m.details || m.help || m.logView {
 		if m.width < 70 {
@@ -237,7 +305,10 @@ func (m *model) footer() []string {
 	if m.width < 70 {
 		return []string{"/ search · enter details · q quit", "↑/↓ select · s start · ? help"}
 	}
-	return []string{"↑/↓ select · / search · Tab focus · 0–4 filter · t sort · ctrl+v columns", "enter details · s start · x skip · c cancel · o open · l diag · ? help · q quit"}
+	if m.width < 120 {
+		return []string{"enter details   / search   tab focus   t sort   ? help   q quit", "ctrl+v columns   ctrl+o view   ↑/↓ wheel browse   s start   q quit"}
+	}
+	return []string{"enter details   / search   tab focus search/filter/sort   0–4 filter   t sort   ? help   q quit", "ctrl+v columns   ctrl+o view   ↑/↓ wheel browse   F2 mouse   s start   x skip   c cancel   ctrl+c quit"}
 }
 
 func (m *model) View() tea.View {
@@ -271,7 +342,21 @@ func (m *model) View() tea.View {
 		if m.snapshot.CapacityKnown {
 			capacity = fmt.Sprintf("Slots: %d/%d · %d free", m.snapshot.Occupied, m.snapshot.Capacity, max(0, m.snapshot.Capacity-m.snapshot.Occupied))
 		}
-		position := fmt.Sprintf("%d/%d  Cols: %s  %s", min(m.cursor+1, len(entries)), len(entries), preset, capacity)
+		density := "Compact"
+		if m.comfortable {
+			density = "Comfortable"
+		}
+		mouse := "On"
+		if m.mouseOff {
+			mouse = "Off"
+		}
+		position := fmt.Sprintf("%d/%d  Cols: %s  View: %s  %s  Mouse: %s", min(m.cursor+1, len(entries)), len(entries), preset, density, capacity, mouse)
+		if width < 120 {
+			position = fmt.Sprintf("%d/%d  Cols: %s  View: %s  %s", min(m.cursor+1, len(entries)), len(entries), preset, density, capacity)
+		}
+		if width < 70 {
+			position = fmt.Sprintf("%d/%d  %s/%s  %s", min(m.cursor+1, len(entries)), len(entries), preset, density, capacity)
+		}
 		selection, current, changed := "No selected work", "No activity recorded", time.Time{}
 		selectedProgress := false
 		if e, ok := m.selected(); ok {
@@ -314,7 +399,10 @@ func (m *model) View() tea.View {
 	}
 	view := tea.NewView(strings.Join(lines, "\n"))
 	view.AltScreen = true
-	view.MouseMode = tea.MouseModeNone
+	view.MouseMode = tea.MouseModeCellMotion
+	if m.mouseOff {
+		view.MouseMode = tea.MouseModeNone
+	}
 	return view
 }
 func numberLabel(n int) string {
@@ -329,7 +417,10 @@ Search is focused on startup. Type freely; ctrl+u clears, enter enables table ac
 / or Tab returns to search; arrows browse without enabling action shortcuts.
 Tab/Shift+Tab cycles table, search, filter and sort; arrows/space change focused controls.
 0 all; 1 reviews; 2 feedback; 3 running/queued; 4 history. t sorts by recent activity.
-Ctrl+V toggles full columns where width permits. Narrow terminals use compact identity columns.
+Ctrl+V toggles full columns; Ctrl+O toggles Compact/Comfortable rows.
+F2 toggles mouse capture (on initially); turn it off for ordinary terminal text selection.
+The wheel browses table rows or scrolls the current details/confirmation, never both.
+Narrow terminals use compact identity columns.
 s start the selected event's configured review or feedback skill; h is an alias.
 m/e in start confirmation select one-run model and effort.
 x skip this event; f follow; F stop following; c request agent cancellation.
