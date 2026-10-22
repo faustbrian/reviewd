@@ -12,8 +12,10 @@ func (e *execution) decisionCommand(start bool) *cobra.Command {
 		name, description = "start", "Queue the configured skill for this exact event; a watcher processes the choice"
 	}
 	var expectedEvent string
+	var pendingOnly bool
 	command := &cobra.Command{Use: name + " <item-id>", Short: description, Args: cobra.ExactArgs(1)}
 	command.Flags().StringVar(&expectedEvent, "event", "", "Require the exact displayed event identity; changed work needs a new decision")
+	command.Flags().BoolVar(&pendingOnly, "pending", false, "Only decide an unstarted pending event; reject an already accepted decision")
 	command.RunE = func(command *cobra.Command, args []string) error {
 		document, path, err := e.load(command, false)
 		if err != nil {
@@ -79,7 +81,15 @@ func (e *execution) decisionCommand(start bool) *cobra.Command {
 		if command.Flags().Changed("event") {
 			expected = []string{expectedEvent}
 		}
-		if _, err := durable.DecideItem(command.Context(), args[0], start, false, overrides, expected...); err != nil {
+		if pendingOnly {
+			if expectedEvent == "" {
+				return failure(2, "--pending requires --event")
+			}
+			_, err = durable.DecidePendingItem(command.Context(), args[0], start, overrides, expectedEvent)
+		} else {
+			_, err = durable.DecideItem(command.Context(), args[0], start, false, overrides, expected...)
+		}
+		if err != nil {
 			return failure(1, err.Error())
 		}
 		return e.presentInbox(command.Context(), command.OutOrStdout(), durable)

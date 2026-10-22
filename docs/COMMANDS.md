@@ -16,7 +16,9 @@
 - `review <pr-url> [--private]`: a fresh selected review skill. `--private` adds a
   read-only/do-not-post prompt request; it is not a tool sandbox.
 - `feedback <pr-url>`: a fresh selected feedback-handling skill.
-- `start <item-id> [--event <event-key>]`: queue that event's configured skill.
+- `start <item-id> [--event <event-key>] [--pending]`: queue that event's configured skill.
+  `--pending` requires `--event` and rejects an already accepted or linked event;
+  the overview uses this guard for one-key and group decisions.
   `--backend`, `--executable`, `--model` and `--reasoning-effort` choose
   one-run settings for its lane.
 - `skip <item-id> [--event <event-key>]`: skip this event, not future feedback.
@@ -50,7 +52,7 @@ titles and activity two lines. The status area shows both choices. Compact colum
 identity visible in narrow terminals. Selected-item status and scrollable details
 retain the remaining information.
 
-- Search is focused on startup, as in cdx. Type across repository, PR number,
+- The table is focused on startup. `/` or Tab enters search across repository, PR number,
   author, title, lane, state and recorded activity; search keys never dispatch
   work. Arrows/page keys browse without leaving search. Enter explicitly enables
   table action shortcuts; `/` returns to search. Ctrl-U clears, Escape clears
@@ -67,7 +69,15 @@ retain the remaining information.
   without changing its captured target. Enter opens details. `?` opens help,
   `l` cached discovery diagnostics and the monitoring log; Escape returns.
   Details/help/logs are scrollable.
-- `s` starts the event's skill (`h` aliases it), `x` skips, `c` cancels,
+- In the overview, `s` queues the selected pending event and `x` skips it
+  immediately, without a per-item confirmation. Skipping is event-local: an
+  unchanged poll stays skipped; a new review or revision follows normal policy.
+  `S`/`X` opens one start/skip confirmation for pending events matching the
+  current search and lane filter, including offscreen matches. The captured
+  group cannot expand on refresh. Results report applied, failed and unattempted
+  counts; an error does not undo earlier successful members.
+- `h` opens advanced start confirmation (including one-run model/effort),
+  `c` cancels,
   `a` pauses/resumes a project, `z` snoozes, `Z` holds until new commits,
   `u` unsnoozes, `f`/`F` follows/unfollows and `o` opens the PR.
   `m`/`e` edits model/effort in a start choice; `y` confirms the captured event,

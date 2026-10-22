@@ -22,6 +22,7 @@ func manyRows() *model {
 func TestDensityControlWrapsContentWithoutChangingSelectionOrSearch(t *testing.T) {
 	m := manyRows()
 	m.Init()
+	press(m, "/")
 	m.cursor = 5
 	m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
 	view := ansi.Strip(m.View().Content)
@@ -53,6 +54,7 @@ func TestDensityControlWrapsContentWithoutChangingSelectionOrSearch(t *testing.T
 func TestWheelNavigationStaysInsideTheVisibleBodyAndDoesNotEnableActions(t *testing.T) {
 	m := manyRows()
 	m.Init()
+	press(m, "/")
 	if m.View().MouseMode != tea.MouseModeCellMotion {
 		t.Fatal("wheel reporting disabled")
 	}

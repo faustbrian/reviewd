@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/faustbrian/reviewd/internal/store"
+	"github.com/faustbrian/reviewd/internal/terminal"
 )
 
 func terminalFixture(t *testing.T) (string, *store.Store, store.InboxItem) {
@@ -83,5 +84,69 @@ func TestTerminalEventDecisionCannotAuthorizeNewerWork(t *testing.T) {
 	controls, controlErr := s.Controls(ctx, time.Now())
 	if err != nil || controlErr != nil || len(items) != 1 || items[0].EventKey != next.EventKey || items[0].State != "pending_decision" || items[0].DecisionID != "" || len(controls.Snoozes) != 1 {
 		t.Fatal("stale terminal choice mutated newer work or cleared its hold")
+	}
+}
+
+func TestPendingOnlyDecisionCannotReplaceConcurrentDecision(t *testing.T) {
+	path, s, item := terminalFixture(t)
+	ctx := context.Background()
+	var out, diagnostics strings.Builder
+	if code := Run(ctx, []string{"--config", path, "start", item.ID, "--event", item.EventKey, "--pending", "--json"}, &out, &diagnostics, Dependencies{}); code != 0 {
+		t.Fatalf("pending start failed: %s", diagnostics.String())
+	}
+	before, _, err := s.Inbox(ctx)
+	if err != nil || len(before) != 1 {
+		t.Fatal("missing queued decision")
+	}
+	for _, kind := range []string{"start", "skip"} {
+		out.Reset()
+		diagnostics.Reset()
+		if code := Run(ctx, []string{"--config", path, kind, item.ID, "--event", item.EventKey, "--pending", "--json"}, &out, &diagnostics, Dependencies{}); code == 0 {
+			t.Fatalf("%s replaced already accepted decision", kind)
+		}
+		entry := terminal.Entry{ItemID: item.ID, EventKey: item.EventKey}
+		if _, err := terminalAction(ctx, []string{"--config", path}, terminal.Action{Kind: kind, Entry: entry, PendingOnly: true}, Dependencies{}); err == nil {
+			t.Fatalf("terminal %s lost the pending guard for the same accepted event", kind)
+		}
+	}
+	after, _, err := s.Inbox(ctx)
+	if err != nil || len(after) != 1 || after[0].State != "queued" || after[0].DecisionID != before[0].DecisionID {
+		t.Fatal("stale quick action changed accepted work")
+	}
+}
+
+func TestQuickSkipIsEventLocalAndUsesThePendingGuard(t *testing.T) {
+	path, s, item := terminalFixture(t)
+	ctx := context.Background()
+	entry := terminal.Entry{ItemID: item.ID, EventKey: item.EventKey}
+	if _, err := terminalAction(ctx, []string{"--config", path}, terminal.Action{Kind: "skip", Entry: entry, PendingOnly: true}, Dependencies{}); err != nil {
+		t.Fatal(err)
+	}
+	scope, err := s.DiscoveryScope(ctx, item.Repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation := []store.Observation{{PullID: item.PullID, Number: item.Number, HeadSHA: item.HeadSHA, Record: json.RawMessage(`{}`)}}
+	if err := s.ApplyDiscovery(ctx, scope, scope, observation, []store.InboxItem{item}); err != nil {
+		t.Fatal(err)
+	}
+	history, err := s.DiscoveryItems(ctx, item.Repository, item.ActorID)
+	if err != nil || len(history) != 1 || history[0].State != "skipped" {
+		t.Fatal("same-event poll resurrected discarded backlog")
+	}
+	scope, err = s.DiscoveryScope(ctx, item.Repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item.EventKey, item.State, item.Baseline, item.Action = "new-event", "queued", false, "auto"
+	if err := s.ApplyDiscovery(ctx, scope, scope, observation, []store.InboxItem{item}); err != nil {
+		t.Fatal(err)
+	}
+	items, _, err := s.Inbox(ctx)
+	if err != nil || len(items) != 1 || items[0].EventKey != "new-event" || items[0].State != "queued" {
+		t.Fatal("skip suppressed future eligible auto work")
+	}
+	if _, err := terminalAction(ctx, []string{"--config", path}, terminal.Action{Kind: "skip", Entry: entry, PendingOnly: true}, Dependencies{}); err == nil {
+		t.Fatal("old quick action discarded new work")
 	}
 }

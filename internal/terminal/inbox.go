@@ -48,6 +48,9 @@ const CachedInboxStatus = "Cached inbox. Completed means native execution finish
 type Action struct {
 	Kind, Model, Effort, Duration string
 	Entry                         Entry
+	Entries                       []Entry
+	PendingOnly                   bool
+	Scope                         string
 }
 
 type Backend struct {
@@ -161,8 +164,8 @@ type model struct {
 
 func (m *model) Init() tea.Cmd {
 	m.ensureSearch()
-	m.focus = 1
-	return tea.Batch(nextTick(), tea.RequestBackgroundColor, m.search.Focus())
+	m.focus = 0
+	return tea.Batch(nextTick(), tea.RequestBackgroundColor)
 }
 func nextTick() tea.Cmd { return tea.Tick(time.Second, func(time.Time) tea.Msg { return tick{} }) }
 
@@ -265,6 +268,28 @@ func (m *model) execute(action Action) tea.Cmd {
 	m.busy, m.pending, m.editing, m.text = true, nil, "", ""
 	m.status = "Applying your selected action…"
 	return func() tea.Msg {
+		if len(action.Entries) > 0 {
+			applied, failed, remaining := 0, 0, len(action.Entries)
+			var failures []string
+			for _, entry := range action.Entries {
+				if m.ctx.Err() != nil {
+					break
+				}
+				_, err := m.backend.Act(m.ctx, Action{Kind: action.Kind, Entry: entry, PendingOnly: true})
+				remaining--
+				if err != nil {
+					failed++
+					failures = append(failures, fmt.Sprintf("%s %s: %s", shortRepo(entry.Project), numberLabel(entry.Number), err))
+				} else {
+					applied++
+				}
+			}
+			summary := fmt.Sprintf("%s: %d applied · %d failed · %d not attempted", action.Kind, applied, failed, remaining)
+			if failed > 0 || remaining > 0 {
+				return actionResult{err: fmt.Errorf("%s; %s", summary, strings.Join(failures, "; "))}
+			}
+			return actionResult{message: summary}
+		}
 		message, err := m.backend.Act(m.ctx, action)
 		return actionResult{message, err}
 	}
@@ -378,7 +403,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, m.execute(*m.pending)
 			case "m", "e":
-				if m.pending.Kind == "start" {
+				if m.pending.Kind == "start" && len(m.pending.Entries) == 0 {
 					m.editing, m.text = map[string]string{"m": "model", "e": "effort"}[key], ""
 				}
 			case "d":
@@ -494,8 +519,41 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.refresh()
 		default:
 			entry, ok := m.selected()
-			if !ok || m.busy {
+			if m.busy || (!ok && key != "S" && key != "X") {
 				return m, nil
+			}
+			if !m.details && !m.help && !m.logView && (key == "s" || key == "x" || key == "S" || key == "X") {
+				if m.width < 24 || m.height < 10 {
+					m.status = "Resize to at least 24×10 to act on the selected work."
+					return m, nil
+				}
+				kind := "start"
+				if key == "x" || key == "X" {
+					kind = "skip"
+				}
+				if key == "S" || key == "X" {
+					var entries []Entry
+					seen := map[string]bool{}
+					for _, candidate := range m.entries() {
+						if pendingCandidate(candidate, kind) && !seen[candidate.ItemID] {
+							entries = append(entries, candidate)
+							seen[candidate.ItemID] = true
+						}
+					}
+					if len(entries) == 0 {
+						m.status = "No matching pending events for this action."
+						return m, nil
+					}
+					scope := fmt.Sprintf("Filter: %s · search: %s", []string{"All", "Reviews", "Feedback", "Running", "History"}[m.filter], fallback(m.search.Value(), "all"))
+					m.pending = &Action{Kind: kind, Entries: entries, PendingOnly: true, Scope: scope}
+					m.offset = 0
+					return m, nil
+				}
+				if !pendingCandidate(entry, kind) {
+					m.status = "Select pending work; h opens advanced start options for other current events."
+					return m, nil
+				}
+				return m, m.execute(Action{Kind: kind, Entry: entry, PendingOnly: true})
 			}
 			action := Action{Entry: entry}
 			switch key {
@@ -540,6 +598,13 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func pendingCandidate(entry Entry, kind string) bool {
+	if entry.State != "pending_decision" || entry.ItemID == "" || entry.EventKey == "" || entry.RunID != "" {
+		return false
+	}
+	return kind == "skip" || entry.ExecutionKind == "feedback_v1" || (entry.ExecutionKind == "" && entry.Lane != "feedback")
 }
 
 func (m *model) browse(key string) {
@@ -606,6 +671,13 @@ func (m *model) confirmationHeader() []string {
 	line := func(text string) string { return clipped(text, max(1, m.width)) }
 	lines := []string{}
 	if m.pending != nil {
+		if len(m.pending.Entries) > 0 {
+			verb := "Start"
+			if m.pending.Kind == "skip" {
+				verb = "Skip"
+			}
+			return []string{line(fmt.Sprintf("%s %d matching pending events", verb, len(m.pending.Entries))), line(m.pending.Scope), line("y confirm group · n/esc cancel · ↑/↓ scroll captured items")}
+		}
 		entry := m.pending.Entry
 		heading := map[string]string{"start": "Start configured skill", "skip": "Skip event", "cancel": "Cancel agent", "pause": "Pause project", "resume": "Resume project", "snooze": "Snooze event", "snooze-head": "Snooze until new commits", "unsnooze": "Release snooze", "follow": "Follow PR", "unfollow": "Stop following PR"}[m.pending.Kind]
 		identity := entry.Title
@@ -644,7 +716,15 @@ func (m *model) wrappedBody() []string {
 	var body string
 	switch {
 	case m.pending != nil:
-		body = m.pending.Entry.Details
+		if len(m.pending.Entries) > 0 {
+			var lines []string
+			for _, entry := range m.pending.Entries {
+				lines = append(lines, fmt.Sprintf("%s %s · %s · %s · %s / %s", shortRepo(entry.Project), numberLabel(entry.Number), entry.Author, entry.Lane, entry.SelectionModel, entry.SelectionEffort))
+			}
+			body = strings.Join(lines, "\n")
+		} else {
+			body = m.pending.Entry.Details
+		}
 	case m.help:
 		body = help
 	case m.logView:

@@ -489,7 +489,16 @@ func (s *Store) ClaimWaitingItem(ctx context.Context, run Run, item InboxItem) (
 // DecideItem records an explicit choice against the current immutable event.
 // A decision does not authorize a later revision or grant publication rights.
 func (s *Store) DecideItem(ctx context.Context, id string, start, now bool, overrides map[string]any, expectedEvent ...string) (InboxItem, error) {
-	return s.decideItem(ctx, id, start, now, overrides, nil, expectedEvent...)
+	return s.decideItem(ctx, id, start, now, overrides, nil, false, expectedEvent...)
+}
+
+// DecidePendingItem prevents a stale overview or batch from replacing a choice
+// another attachment already accepted for the same event.
+func (s *Store) DecidePendingItem(ctx context.Context, id string, start bool, overrides map[string]any, event string) (InboxItem, error) {
+	if event == "" {
+		return InboxItem{}, errors.New("a pending decision requires its displayed event")
+	}
+	return s.decideItem(ctx, id, start, false, overrides, nil, true, event)
 }
 
 type FeedbackDecision struct {
@@ -500,9 +509,9 @@ type FeedbackDecision struct {
 // for fixes, normal commit/push, metadata, original replies/settled resolutions
 // and renewed existing reviewer requests. A private-review start is not consent.
 func (s *Store) DecideFeedbackItem(ctx context.Context, id string, overrides map[string]any, expected FeedbackDecision) (InboxItem, error) {
-	return s.decideItem(ctx, id, true, false, overrides, &expected, expected.EventKey)
+	return s.decideItem(ctx, id, true, false, overrides, &expected, false, expected.EventKey)
 }
-func (s *Store) decideItem(ctx context.Context, id string, start, now bool, overrides map[string]any, feedback *FeedbackDecision, expectedEvent ...string) (InboxItem, error) {
+func (s *Store) decideItem(ctx context.Context, id string, start, now bool, overrides map[string]any, feedback *FeedbackDecision, pendingOnly bool, expectedEvent ...string) (InboxItem, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return InboxItem{}, err
@@ -514,6 +523,9 @@ func (s *Store) decideItem(ctx context.Context, id string, start, now bool, over
 	var item InboxItem
 	if err != nil || json.Unmarshal([]byte(raw), &item) != nil {
 		return item, errors.New("current review item is unavailable; synchronize before deciding")
+	}
+	if pendingOnly && (item.State != "pending_decision" || item.RunID != "") {
+		return item, errors.New("displayed item is no longer unstarted pending work; refresh before deciding")
 	}
 	if start && (item.Category == "own_pr_feedback" || (item.ExecutionKind != "" && (item.ExecutionKind != "feedback_v1" || item.Category != "feedback_handling"))) {
 		return item, errors.New("this item is notification-only or has an unknown skill lane")

@@ -150,6 +150,9 @@ func (m *model) tableView(height int) string {
 	now := time.Now()
 	var cols []column
 	switch {
+	case width < 39:
+		// Immediate overview decisions need a visible target even at 24 columns.
+		cols = []column{{"Status", 7, status}, {"Repository / PR", max(1, width-10), repoPR(max(1, width-10))}}
 	case width < 59:
 		cols = []column{{"Status", 7, status}, {"Lane", 4, lane}, {"Repository / PR", max(1, width-24), repoPR(max(1, width-24))}, {"Author", 8, author}}
 	case m.full && width >= 119:
@@ -279,6 +282,9 @@ func (m *model) visibleRows(height int) int {
 
 func (m *model) footer() []string {
 	if m.pending != nil {
+		if len(m.pending.Entries) > 0 {
+			return []string{"y confirm group · n/esc dismiss · ↑/↓ scroll · ctrl+c quit", "Only the captured pending events are affected; future events keep their normal policy."}
+		}
 		return []string{"y confirm · n/esc dismiss · arrows scroll · m/e model/effort", "Choices apply only to the captured event; refresh never grants consent."}
 	}
 	if m.focus == 2 || m.focus == 3 {
@@ -303,12 +309,12 @@ func (m *model) footer() []string {
 		return []string{"↑/↓ PgUp/PgDn Home/End scroll · esc back · ? help · q quit", "s start · x skip · c cancel · a pause · z snooze · f follow · o open"}
 	}
 	if m.width < 70 {
-		return []string{"/ search · enter details · q quit", "↑/↓ select · s start · ? help"}
+		return []string{"s start · x skip · / search", "S/X group · h options · q quit"}
 	}
 	if m.width < 120 {
-		return []string{"enter details   / search   tab focus   t sort   ? help   q quit", "ctrl+v columns   ctrl+o view   ↑/↓ wheel browse   s start   q quit"}
+		return []string{"s start   x skip   S/X filtered group   h options   / search   q quit", "enter details   t sort   ctrl+v columns   ctrl+o view   ↑/↓ browse   q quit"}
 	}
-	return []string{"enter details   / search   tab focus search/filter/sort   0–4 filter   t sort   ? help   q quit", "ctrl+v columns   ctrl+o view   ↑/↓ wheel browse   F2 mouse   s start   x skip   c cancel   ctrl+c quit"}
+	return []string{"s start   x skip   S/X filtered group   h options   / search   enter details   0–4 filter   t sort   ? help   q quit", "ctrl+v columns   ctrl+o view   ↑/↓ wheel browse   F2 mouse   c cancel   tab focus search/filter/sort   ctrl+c quit"}
 }
 
 func (m *model) View() tea.View {
@@ -413,15 +419,16 @@ func numberLabel(n int) string {
 }
 
 const help = `Navigation: arrows/j/k, Home/End, PgUp/PgDn; enter details, esc back.
-Search is focused on startup. Type freely; ctrl+u clears, enter enables table actions.
-/ or Tab returns to search; arrows browse without enabling action shortcuts.
+The table is focused on startup: s queues pending work; x skips that event immediately.
+/ or Tab enters search; type freely, ctrl+u clears, enter returns to table actions.
+S/X confirms one group of pending events matching the current search and filter.
 Tab/Shift+Tab cycles table, search, filter and sort; arrows/space change focused controls.
 0 all; 1 reviews; 2 feedback; 3 running/queued; 4 history. t sorts by recent activity.
 Ctrl+V toggles full columns; Ctrl+O toggles Compact/Comfortable rows.
 F2 toggles mouse capture (on initially); turn it off for ordinary terminal text selection.
 The wheel browses table rows or scrolls the current details/confirmation, never both.
 Narrow terminals use compact identity columns.
-s start the selected event's configured review or feedback skill; h is an alias.
+h opens advanced start confirmation for the selected event's configured skill.
 m/e in start confirmation select one-run model and effort.
 x skip this event; f follow; F stop following; c request agent cancellation.
 a pause/resume project; z snooze duration (d edits); Z until new commits; u unsnooze.

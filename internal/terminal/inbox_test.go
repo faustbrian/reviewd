@@ -21,7 +21,7 @@ func skillModel() *model {
 func TestStartFromHelpShowsCapturedEvent(t *testing.T) {
 	m := skillModel()
 	press(m, "?")
-	press(m, "s")
+	press(m, "h")
 	view := m.View().Content
 	if !strings.Contains(view, "Exact body: **No findings.**") || !strings.Contains(view, "Inline file.go:12:") || !strings.Contains(view, "GitHub event: COMMENT") {
 		t.Fatal("publication confirmation hid its exact body, inline comments or GitHub event behind help")
@@ -34,7 +34,7 @@ func TestStartKeepsCapturedEventAcrossRefreshAndSelection(t *testing.T) {
 	m.backend = Backend{Load: func(context.Context) (Snapshot, error) {
 		return Snapshot{Entries: []Entry{{Key: "selected", RunID: "run-new", ItemID: "item-new", EventKey: "event-new", Details: "NEW unrelated preview"}}}, nil
 	}, Act: func(_ context.Context, action Action) (string, error) { received = action; return "", nil }}
-	press(m, "s")
+	press(m, "h")
 	m.Update(tick{})
 	if view := m.View().Content; !strings.Contains(view, "Exact body: **No findings.**") || strings.Contains(view, "NEW unrelated preview") {
 		t.Fatal("refresh silently replaced the preview being authorized")
@@ -113,7 +113,7 @@ func TestDetailEndCanScrollBackOneLine(t *testing.T) {
 
 func TestTinyViewportCannotConfirmSkillStart(t *testing.T) {
 	m := skillModel()
-	press(m, "s")
+	press(m, "h")
 	m.Update(tea.WindowSizeMsg{Width: 12, Height: 5})
 	if command := press(m, "y"); command != nil || m.pending == nil {
 		t.Fatal("tiny viewport authorized a publication without room to display its confirmation")

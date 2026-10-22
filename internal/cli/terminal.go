@@ -273,6 +273,9 @@ func terminalAction(ctx context.Context, base []string, action terminal.Action, 
 			return "", errors.New("select a current inbox event")
 		}
 		args = []string{action.Kind, entry.ItemID, "--event", entry.EventKey}
+		if action.PendingOnly {
+			args = append(args, "--pending")
+		}
 		if action.Kind == "start" {
 			if action.Model != "" {
 				args = append(args, "--model", action.Model)

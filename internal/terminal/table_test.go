@@ -121,6 +121,29 @@ func TestShortTableKeepsADataRow(t *testing.T) {
 	}
 }
 
+func TestOverviewActionsKeepSelectedRepositoryAndPRVisibleAtNarrowWidths(t *testing.T) {
+	for _, width := range []int{24, 38, 39, 40, 59, 60} {
+		for _, project := range []string{"github.com/acme/api", "github.com/acme/long-repository-name"} {
+			m := pendingOverview()
+			m.width, m.height = width, 10
+			m.snapshot.Entries[1].Project = project
+			m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+			selected := ""
+			for _, line := range strings.Split(ansi.Strip(m.View().Content), "\n") {
+				if strings.HasPrefix(line, "› ") {
+					selected = line
+				}
+			}
+			if !strings.Contains(selected, "acme/") || !strings.Contains(selected, "#2") {
+				t.Fatalf("width %d hides the action target: %q", width, selected)
+			}
+			if project == "github.com/acme/api" && !strings.Contains(selected, "acme/api #2") {
+				t.Fatalf("width %d hides the short repository: %q", width, selected)
+			}
+		}
+	}
+}
+
 func TestShortConfirmationKeepsCapturedIdentityAndChoiceVisible(t *testing.T) {
 	m := skillModel()
 	m.width, m.height = 24, 10
@@ -128,7 +151,7 @@ func TestShortConfirmationKeepsCapturedIdentityAndChoiceVisible(t *testing.T) {
 	m.snapshot.Entries[0].Number = 7
 	m.snapshot.Entries[0].Author = "alice"
 	m.snapshot.Entries[0].Title = "github.com/acme/api #7 " + strings.Repeat("long title ", 20)
-	press(m, "s")
+	press(m, "h")
 	view := ansi.Strip(m.View().Content)
 	if !strings.Contains(view, "#7 acme/api") || !strings.Contains(view, "y start") {
 		t.Fatalf("confirmation hides identity or choice: %s", view)
@@ -202,9 +225,10 @@ func TestReferenceScrollbarAndCoreIdentitySurvivePagingAndResize(t *testing.T) {
 	}
 }
 
-func TestStartupSearchMatchesReferenceWithoutActionShortcuts(t *testing.T) {
+func TestExplicitSearchDoesNotDispatchActionShortcuts(t *testing.T) {
 	m := skillModel()
 	m.Init()
+	press(m, "/")
 	for _, key := range []string{"s", "x", "c", "a", "f", "o", "q", "1", "2", "3", "é"} {
 		press(m, key)
 	}
@@ -217,7 +241,7 @@ func TestStartupSearchMatchesReferenceWithoutActionShortcuts(t *testing.T) {
 		t.Fatal("browsing silently enabled action shortcuts")
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	press(m, "s")
+	press(m, "h")
 	if m.pending == nil || m.pending.Kind != "start" {
 		t.Fatal("explicit action focus lost the existing start action")
 	}
@@ -243,6 +267,7 @@ func TestLongSearchKeepsControlsAnchoredThroughEditingAndResize(t *testing.T) {
 	for _, paste := range []bool{false, true} {
 		m := skillModel()
 		m.Init()
+		press(m, "/")
 		query := strings.Repeat("abcdefghijklmnop", 4)
 		if paste {
 			m.Update(tea.PasteMsg{Content: query})
@@ -276,6 +301,7 @@ func TestCompactFooterRetainsAnEffectiveExitControl(t *testing.T) {
 	m := skillModel()
 	m.width, m.height = 40, 12
 	m.Init()
+	press(m, "/")
 	footer := func() string {
 		lines := strings.Split(ansi.Strip(m.View().Content), "\n")
 		return strings.Join(lines[len(lines)-2:], "\n")
@@ -319,7 +345,7 @@ func TestDismissedChoiceDoesNotDisplaceSelectedHoldReason(t *testing.T) {
 		if state == "pending_decision" {
 			e.Section = "owed"
 		}
-		press(m, "s")
+		press(m, "h")
 		press(m, "n")
 		view := ansi.Strip(m.View().Content)
 		if !strings.Contains(view, "Initial backlog") || !strings.Contains(view, "Choice dismissed") {

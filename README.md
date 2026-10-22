@@ -65,14 +65,18 @@ reviewd watch
 
 `watch` continuously polls GitHub and opens a searchable table inbox. It shows
 PR authors, review/feedback lanes, execution states and recorded activity.
-Search is focused initially: type to filter and use arrows to browse. Press Enter
-to enable table actions: `0`–`4` filters, `t` sorts, Enter opens details, and `?`
-lists all controls. Select an item, press `s` to start its configured skill, then
-`y` to confirm. `/` returns to search; Ctrl-V toggles core/full columns and
+The table is focused initially: `s` queues the selected pending event with its
+configured skill and `x` skips it immediately. `S`/`X` starts/skips the matching
+pending group with one confirmation, including offscreen matches. Search and
+filters constrain the group; new events cannot join an already opened choice.
+Use `h` for advanced start options, `0`–`4` to filter, `t` to sort, Enter for
+details and `?` for help. `/` enters search; Enter returns to table actions.
+Ctrl-V toggles core/full columns and
 Ctrl-O switches compact/comfortable rows. The wheel browses the table or scrolls open details;
 F2 releases mouse capture for terminal text selection. Change the relevant `"ask"` policies to `"auto"` for automatic handling of new events,
 or `"notify"` for notifications only. The first observed backlog stays held for an explicit
-choice even with automatic policies.
+choice even with automatic policies. Skipping discards only that event, not
+future reviews or feedback for the PR.
 
 For monitoring without the keyboard inbox, keep this running in a terminal:
 
